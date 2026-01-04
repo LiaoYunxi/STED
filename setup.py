@@ -37,6 +37,7 @@ setup(
         "scipy",
         "scikit-learn",
         "h5py",
-        "matplotlib"
+        "matplotlib",
+        "tables"
     ],
 )

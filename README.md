@@ -266,4 +266,4 @@ For questions or support, please contact:
 ## 🙏 Acknowledgments
 
 - Thanks to all contributors who have helped develop and improve STED
-- This work was supported by...
+- This work was supported by the National Natural Science Foundation of China (NSFC, Grant No. 32270603) and the Beijing Natural Science Foundation (BJNSF, Grant No.5242010).
