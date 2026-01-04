@@ -256,7 +256,7 @@ print(predicted_signals.head())
 For detailed documentation, please refer to:
 - [Tutorial Notebook](tutorial.ipynb)
 - Individual module documentation in the code
-- Example datasets in the [demo](demo/) directory
+- Example datasets in the Zendo, please refer to [STED:Supplement Information and Demo Data](https://doi.org/10.5281/zenodo.17931080)
 
 ## 📞 Contact
 
