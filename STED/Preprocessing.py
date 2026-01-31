@@ -318,6 +318,7 @@ class scPreProcessing():
         count_per_cell = np.array(sc_count_mat.sum(axis=0)).flatten()
         non_zero_columns_idx = np.where(count_per_cell != 0)[0]
         sc_count_mat = sc_count_mat[:, non_zero_columns_idx]
+        # sc_count_cells = [sc_count_cells[i] for i in non_zero_columns_idx.tolist()]
         count_per_cell = count_per_cell[non_zero_columns_idx]
         # TODO:sc_count_mat shape: gene X cell 注释掉了下面一句
         #sc_count_genes = [sc_count_genes[i] for i in range(len(sc_count_genes)) if i in non_zero_columns_idx.tolist()]
@@ -558,6 +559,74 @@ class scPreProcessing():
             pass
         gc.collect()
 
+    def preprocessing_forBERT(self,sc_count_file,sc_anno_file,gene_names,pre_normalized=False,
+                              anchored_genes=[],anchored_strength=2,specific=True):
+        import scanpy as sc
+        # gene_embeddings = np.load(gene2vec_file)
+        data = sc.read_h5ad(sc_count_file)
+        data = data[:,data.var_names.isin(gene_names)].copy()
+
+        indices = [index for index, element in enumerate(gene_names) if element in data.var_names] 
+        # indices = [gene_names.index(element) for i, element in enumerate(data.var_names)] 
+        data_csr = np.zeros((data.shape[0], len(gene_names)), dtype=np.float32) 
+
+        if pre_normalized == False:
+            raw_csr = np.zeros((data.shape[0], len(gene_names)), dtype=np.float32) 
+            raw_csr[:, indices]=np.array(data.X.todense())
+            self.mix_raw = copy.deepcopy(csr_matrix(raw_csr))
+            sc.pp.normalize_total(data, target_sum=1e4)
+            sc.pp.log1p(data)
+
+            data_csr[:, indices]=np.array(data.X.todense())
+        else:
+            data_csr[:, indices]=np.array(data.X)
+            
+        self.input_df = copy.deepcopy(csr_matrix(data_csr))
+
+        self.sc_genes = gene_names
+        self.sc_cells = data.obs_names
+        # self.sc_genes = self.vector_genes
+        self.input_int = copy.deepcopy(data_csr)
+        self.input_int.data = np.floor(self.input_int.data).astype(int)
+
+        # read cell-type meta file
+        cell_celltype_dict = {}
+        for line in open(sc_anno_file, "r"):
+            items = line.strip().split("\t")
+            cell_celltype_dict[items[0]] = items[1]
+            self.ann_dict = cell_celltype_dict
+
+        if len(anchored_genes)>0:
+            if isinstance(anchored_genes,list):
+                anchor_dict = {i: words for i, words in enumerate(anchored_genes)}
+            elif isinstance(anchored_genes,dict):
+                anchor_dict = anchored_genes
+            else:
+                print("Error: please input anchored genes in right format.")
+            
+            row = []
+            col = []
+            data = []
+            gene_name_to_idx = {gene: idx for idx, gene in enumerate(gene_names)}
+            for i, word_list in enumerate(anchored_genes):
+                for word in word_list:
+                    if word in gene_name_to_idx:
+                        row.append(i)
+                        col.append(gene_name_to_idx[word])
+                        data.append(anchored_strength) 
+            anchor_matrix = csr_matrix((data, (row, col)), shape=(len(anchored_genes), len(gene_names)))
+
+            SD = SetData()
+            SD.set_expression(self.input_int,self.sc_genes,[])
+            SD.set_anchor(anchored_genes,do_plot=False)
+            SD.seed_processing(specific=specific)
+
+            self.gene2id = SD.gene2id
+            self.use_anchor_dict = SD.use_anchor_dict
+            self.use_anchor_list = SD.use_anchor_list
+            self.seed_topics = SD.seed_topics
+            self.seed_k = SD.seed_k
+            self.seed_mat = anchor_matrix
 
 class gsPreProcessing():
     def __init__(self):
@@ -781,4 +850,28 @@ class gsPreProcessing():
             self.other_genes = None
         #self.seed_topics = seed_topics
         self.gene2id = gene2id
-        logger.info('sample selection: {}'.format(self.target_df.shape))  
+        logger.info('sample selection: {}'.format(self.target_df.shape))
+    def preprocessing_forBERT(self,gene_names):
+        import scanpy as sc
+        import anndata as ad
+        # TODO:20260128
+        self.mix_raw = self.mix_raw.transpose()
+        # gene_embeddings = np.load(gene2vec_file)
+        data = ad.AnnData(self.mix_raw,
+                          var=pd.DataFrame(index=self.gs_genes),
+                          obs=pd.DataFrame(index=self.gs_samples))
+        data = data[:,data.var_names.isin(gene_names)].copy()
+        indices = [index for index, element in enumerate(gene_names) \
+                   if element in data.var_names]
+        
+        sc.pp.normalize_total(data, target_sum=1e4)
+        sc.pp.log1p(data)
+        
+        data_csr = csr_matrix((data.shape[0], len(gene_names)), dtype=np.float32) 
+        data_csr[:, indices]  = np.array(data.X.todense())
+
+        self.use_genes = self.gs_genes = gene_names
+        self.target_df = data_csr
+        self.target_int = copy.deepcopy(data_csr)
+        self.target_int.data = np.floor(self.target_int.data).astype(int)
+

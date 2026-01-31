@@ -3,7 +3,7 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**STED** is a Python package designed for the analysis of single-cell and bulk multi-omics data. It leverages semi-supervised topic modeling (Anchored CorEx and LDA) to identify cell-type-specific gene modules in single-cell data and uses these models to deconvolve bulk RNA-seq, ATAC-seq and ChIP-seq data, estimating cell type proportions and predicting cell-type-specific epigenetic signals.
+**STED** is a Python package designed for the analysis of single-cell and bulk multi-omics data. It leverages topic modeling (Anchored CorEx/LDA/BERTopic) to identify cell-type-specific gene modules in single-cell data and uses these models to deconvolve bulk RNA-seq, ATAC-seq and ChIP-seq data, estimating cell type proportions and predicting cell-type-specific epigenetic signals.
 
 <p align="center">
   <img src="pipline_git.png" alt="STED Workflow" width="800"/>
