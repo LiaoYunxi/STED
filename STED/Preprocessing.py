@@ -7,6 +7,7 @@ import numpy as np
 import anndata as ad
 import seaborn as sns
 import matplotlib.pyplot as plt
+import sys
 
 from scipy.sparse import csr_matrix
 from sklearn.preprocessing import MaxAbsScaler #MinMaxScaler
@@ -20,6 +21,7 @@ from .utils import *
 from .data import *
 from .MarkerFind import *
 from .Genescore import *
+from .processing.scRNA_workflow import *
 
 def Gene_scores(adata,
                 genome,
@@ -281,59 +283,67 @@ class scPreProcessing():
         self.seed_k = None
         self.use_anchor_dict =None
     
-    def set_data(self,sc_count_file,sc_anno_file,batch_info=None):
+    def set_data(self,sc_count_file,sc_anno_file,batch_info=None,pre_normalized=False):
+        if pre_normalized == False:
         # read scRNA-seq data
-        if sc_count_file.endswith(".h5"):
-            sc_count = read_10X_h5(sc_count_file)
-            sc_count_mat = sc_count.matrix
-            sc_count_genes = sc_count.names.tolist()
-            sc_count_cells = sc_count.barcodes.tolist()
-            if type(sc_count_genes[0]) == bytes:
-                sc_count_genes = [i.decode() for i in sc_count_genes]
-            if type(sc_count_cells[0]) == bytes:
-                sc_count_cells = [i.decode() for i in sc_count_cells]
-        elif sc_count_file.endswith(".h5ad"):
-            sc_count = read_10X_h5ad(sc_count_file)
-            sc_count_mat = sc_count.matrix
-            sc_count_genes = sc_count.names.tolist()
-            sc_count_cells = sc_count.barcodes.tolist()
-            if type(sc_count_genes[0]) == bytes:
-                sc_count_genes = [i.decode() for i in sc_count_genes]
-            if type(sc_count_cells[0]) == bytes:
-                sc_count_cells = [i.decode() for i in sc_count_cells]
+            if sc_count_file.endswith(".h5"):
+                sc_count = read_10X_h5(sc_count_file)
+                sc_count_mat = sc_count.matrix
+                sc_count_genes = sc_count.names.tolist()
+                sc_count_cells = sc_count.barcodes.tolist()
+                if type(sc_count_genes[0]) == bytes:
+                    sc_count_genes = [i.decode() for i in sc_count_genes]
+                if type(sc_count_cells[0]) == bytes:
+                    sc_count_cells = [i.decode() for i in sc_count_cells]
+            elif sc_count_file.endswith(".h5ad"):
+                sc_count = read_10X_h5ad(sc_count_file)
+                sc_count_mat = sc_count.matrix
+                sc_count_genes = sc_count.names.tolist()
+                sc_count_cells = sc_count.barcodes.tolist()
+                if type(sc_count_genes[0]) == bytes:
+                    sc_count_genes = [i.decode() for i in sc_count_genes]
+                if type(sc_count_cells[0]) == bytes:
+                    sc_count_cells = [i.decode() for i in sc_count_cells]
+            else:
+                sc_count = read_count(sc_count_file)
+                sc_count_mat = sc_count["matrix"]
+                sc_count_mat = csc_matrix(sc_count_mat, dtype=np.float32)
+                sc_count_genes = sc_count["features"]
+                sc_count_cells = sc_count["barcodes"]
+
+            # filter the count matrix
+            # remove negative values (can be directly removed in csr_matrix without using applymap)
+            if len(sc_count_genes) != sc_count_mat.shape[0]:
+                sc_count_mat =sc_count_mat.transpose()
+
+            sc_count_mat.data[sc_count_mat.data < 0] = 0
+            # remove 0 values by filtering out columns where the sum of each column is zero
+            count_per_cell = np.array(sc_count_mat.sum(axis=0)).flatten()
+            non_zero_columns_idx = np.where(count_per_cell != 0)[0]
+            sc_count_mat = sc_count_mat[:, non_zero_columns_idx]
+            # sc_count_cells = [sc_count_cells[i] for i in non_zero_columns_idx.tolist()]
+            count_per_cell = count_per_cell[non_zero_columns_idx]
+            # TODO:sc_count_mat shape: gene X cell 注释掉了下面一句
+            #sc_count_genes = [sc_count_genes[i] for i in range(len(sc_count_genes)) if i in non_zero_columns_idx.tolist()]
+
+            # read cell-type meta file
+            cell_celltype_dict = {}
+            for line in open(sc_anno_file, "r"):
+                items = line.strip().split("\t")
+                cell_celltype_dict[items[0]] = items[1]
+                self.ann_dict = cell_celltype_dict
+
+            self.mix_raw = sc_count_mat
+            self.sc_genes = sc_count_genes
+            self.sc_cells = sc_count_cells
         else:
-            sc_count = read_count(sc_count_file)
-            sc_count_mat = sc_count["matrix"]
-            sc_count_mat = csc_matrix(sc_count_mat, dtype=np.float32)
-            sc_count_genes = sc_count["features"]
-            sc_count_cells = sc_count["barcodes"]
-
-        # filter the count matrix
-        # remove negative values (can be directly removed in csr_matrix without using applymap)
-        if len(sc_count_genes) != sc_count_mat.shape[0]:
-            sc_count_mat =sc_count_mat.transpose()
-
-        sc_count_mat.data[sc_count_mat.data < 0] = 0
-        # remove 0 values by filtering out columns where the sum of each column is zero
-        count_per_cell = np.array(sc_count_mat.sum(axis=0)).flatten()
-        non_zero_columns_idx = np.where(count_per_cell != 0)[0]
-        sc_count_mat = sc_count_mat[:, non_zero_columns_idx]
-        # sc_count_cells = [sc_count_cells[i] for i in non_zero_columns_idx.tolist()]
-        count_per_cell = count_per_cell[non_zero_columns_idx]
-        # TODO:sc_count_mat shape: gene X cell 注释掉了下面一句
-        #sc_count_genes = [sc_count_genes[i] for i in range(len(sc_count_genes)) if i in non_zero_columns_idx.tolist()]
-
-        # read cell-type meta file
-        cell_celltype_dict = {}
-        for line in open(sc_anno_file, "r"):
-            items = line.strip().split("\t")
-            cell_celltype_dict[items[0]] = items[1]
-            self.ann_dict = cell_celltype_dict
-
-        self.mix_raw = sc_count_mat
+            adata = ad.read_h5ad(sc_count_file)
+            self.mix_raw = adata.X
+            self.sc_genes = adata.var_names
+            self.sc_cells = adata.obs_names
+    
         self.batch_info = batch_info
-        self.sc_genes = sc_count_genes
-        self.sc_cells = sc_count_cells
+        self.pre_normalized = pre_normalized
         logger.info('original: {}'.format(self.mix_raw.shape))
 
     def cell_selection(self, target_samples=[]):
@@ -559,7 +569,7 @@ class scPreProcessing():
             pass
         gc.collect()
 
-    def preprocessing_forBERT(self,sc_count_file,sc_anno_file,gene_names,pre_normalized=False,
+    def preprocessing_forBERT(self,sc_count_file,sc_anno_file,gene_names,
                               anchored_genes=[],anchored_strength=2,specific=True):
         import scanpy as sc
         # gene_embeddings = np.load(gene2vec_file)
@@ -570,7 +580,7 @@ class scPreProcessing():
         # indices = [gene_names.index(element) for i, element in enumerate(data.var_names)] 
         data_csr = np.zeros((data.shape[0], len(gene_names)), dtype=np.float32) 
 
-        if pre_normalized == False:
+        if self.pre_normalized == False:
             raw_csr = np.zeros((data.shape[0], len(gene_names)), dtype=np.float32) 
             raw_csr[:, indices]=np.array(data.X.todense())
             self.mix_raw = copy.deepcopy(csr_matrix(raw_csr))
@@ -627,6 +637,52 @@ class scPreProcessing():
             self.seed_topics = SD.seed_topics
             self.seed_k = SD.seed_k
             self.seed_mat = anchor_matrix
+    def preprocessing_forFoundation(self,gene_names=[]):
+        import scanpy as sc
+        if len(gene_names) == 0:
+            print("Please input gene_names.")
+            return
+        if self.pre_normalized == False:
+            X_df = pd.DataFrame(self.mix_raw.todense().T, index=self.sc_cells, columns=self.sc_genes)
+            X_df, to_fill_columns, var = main_gene_selection(X_df, gene_names)  
+
+            adata = sc.AnnData(X_df,obs = pd.DataFrame(index = X_df.index),var =pd.DataFrame(index=X_df.columns) )
+
+            adata_uni = BasicFilter(adata,qc_min_genes=200,qc_min_cells=0) # filter cell and gene by lower limit
+            adata_uni = QC_Metrics_info(adata)
+
+            self.mix_raw = adata_uni.X
+            self.batch_info = None
+            self.sc_genes = adata_uni.var_names
+            self.sc_cells = adata_uni.obs_names
+
+            indices = [index for index, element in enumerate(gene_names) if element in self.sc_genes]
+            data_csr = np.zeros((adata_uni.shape[0], len(gene_names)), dtype=np.float32) 
+
+            raw_csr = np.zeros((adata_uni.shape[0], len(gene_names)), dtype=np.float32) 
+            raw_csr[:, indices]=np.array(self.mix_raw)
+            self.mix_raw = copy.deepcopy(csr_matrix(raw_csr))
+            sc.pp.normalize_total(adata_uni, target_sum=1e4)
+            sc.pp.log1p(adata_uni)
+            data_csr[:, indices]=np.array(adata_uni.X)    
+
+            self.sc_cells = adata_uni.obs_names
+
+        else:
+            indices = [index for index, element in enumerate(gene_names) if element in self.sc_genes]
+            data_csr = np.zeros((self.mix_raw.shape[0], len(gene_names)), dtype=np.float32) 
+            data_csr[:, indices]=np.array(self.mix_raw)
+
+        new_ann_dict = {}
+        for cell in self.sc_cells:
+            new_ann_dict[cell] = self.ann_dict[cell]
+        self.ann_dict = new_ann_dict
+            
+        self.input_df = copy.deepcopy(csr_matrix(data_csr))
+        self.sc_genes = gene_names
+        self.input_int = copy.deepcopy(data_csr)
+        self.input_int.data = np.floor(self.input_int.data).astype(int)
+
 
 class gsPreProcessing():
     def __init__(self):
@@ -638,10 +694,11 @@ class gsPreProcessing():
         self.GS_file = None
         self.peak_file = None
     
-    def set_data(self,benchmark=False,Epi=False,gs_count_file=None,
-                 GS_file=None,batch_info=None,
+    def set_data(self,benchmark=False,Epi=False,pre_normalized=False,
+                 gs_count_file=None,GS_file=None,batch_info=None,
                  gene_anno_file=None,peak_file=None):
         if Epi:
+            pre_normalized = False
             if gs_count_file is None:
                 if benchmark:
                     use_top_pcs=True
@@ -688,61 +745,67 @@ class gsPreProcessing():
                 self.gene_anno_file = gene_anno_file
                 self.peak_file =peak_file
 
-        # read data
-        if gs_count_file.endswith(".h5"):
-            gs_count = read_10X_h5(gs_count_file)
-            gs_count_mat = gs_count.matrix
-            gs_count_genes = gs_count.names.tolist()
-            gs_count_samples = gs_count.barcodes.tolist()
-            if type(gs_count_genes[0]) == bytes:
-                gs_count_genes = [i.decode() for i in gs_count_genes]
-            if type(gs_count_samples[0]) == bytes:
-                gs_count_samples = [i.decode() for i in gs_count_samples]
-        elif gs_count_file.endswith(".h5ad"):
-            gs_count = read_10X_h5ad(gs_count_file)
-            gs_count_mat = gs_count.matrix
-            gs_count_genes = gs_count.names.tolist()
-            gs_count_samples = gs_count.barcodes.tolist()
-            if type(gs_count_genes[0]) == bytes:
-                gs_count_genes = [i.decode() for i in gs_count_genes]
-            if type(gs_count_samples[0]) == bytes:
-                gs_count_samples = [i.decode() for i in gs_count_samples]
+        if pre_normalized == False:
+            # read data
+            if gs_count_file.endswith(".h5"):
+                gs_count = read_10X_h5(gs_count_file)
+                gs_count_mat = gs_count.matrix
+                gs_count_genes = gs_count.names.tolist()
+                gs_count_samples = gs_count.barcodes.tolist()
+                if type(gs_count_genes[0]) == bytes:
+                    gs_count_genes = [i.decode() for i in gs_count_genes]
+                if type(gs_count_samples[0]) == bytes:
+                    gs_count_samples = [i.decode() for i in gs_count_samples]
+            elif gs_count_file.endswith(".h5ad"):
+                gs_count = read_10X_h5ad(gs_count_file)
+                gs_count_mat = gs_count.matrix
+                gs_count_genes = gs_count.names.tolist()
+                gs_count_samples = gs_count.barcodes.tolist()
+                if type(gs_count_genes[0]) == bytes:
+                    gs_count_genes = [i.decode() for i in gs_count_genes]
+                if type(gs_count_samples[0]) == bytes:
+                    gs_count_samples = [i.decode() for i in gs_count_samples]
+            else:
+                gs_count = pd.read_table(gs_count_file, sep="\t", index_col=0)
+                gs_count_mat = gs_count.values
+                gs_count_mat = csc_matrix(gs_count_mat, dtype=np.float32)
+                gs_count_genes = gs_count.index.to_list()
+                gs_count_samples = gs_count.columns.to_list()
+
+
+            if len(gs_count_genes) != gs_count_mat.shape[0]:
+                gs_count_mat = gs_count_mat.transpose()
+            # filter the count matrix
+            # remove negative values (can be directly removed in csr_matrix without using applymap)
+            gs_count_mat.data[gs_count_mat.data < 0] = 0
+
+            # remove 0 values by filtering out columns where the sum of each column is zero
+            count_per_sample = np.array(gs_count_mat.sum(axis=0)).flatten()
+            non_zero_columns_idx = np.where(count_per_sample != 0)[0]
+            gs_count_mat = gs_count_mat[:, non_zero_columns_idx]
+            count_per_sample = count_per_sample[non_zero_columns_idx]
+
+            self.mix_raw = gs_count_mat
+            self.gs_genes = gs_count_genes
+            self.gs_samples = gs_count_samples
+            self.batch_info = batch_info
+            self.GS_file = GS_file
+            self.peak_file =peak_file
+
+            if self.mix_raw.shape[0] != len(set(self.gs_genes)):
+                tmp_df = copy.deepcopy(self.mix_raw.todense())
+                idx_name = self.gs_genes
+                tmp_df = pd.DataFrame(tmp_df, index=idx_name)
+                tmp_df['symbol'] = idx_name
+                tmp_df = tmp_df.dropna(subset=["symbol"])
+                self.mix_raw = csr_matrix(tmp_df.groupby("symbol").median().values) # Take median value for duplication rows
+                self.gs_genes = tmp_df.groupby("symbol").median().index
         else:
-            gs_count = pd.read_table(gs_count_file, sep="\t", index_col=0)
-            gs_count_mat = gs_count.values
-            gs_count_mat = csc_matrix(gs_count_mat, dtype=np.float32)
-            gs_count_genes = gs_count.index.to_list()
-            gs_count_samples = gs_count.columns.to_list()
-
-
-        if len(gs_count_genes) != gs_count_mat.shape[0]:
-            gs_count_mat = gs_count_mat.transpose()
-        # filter the count matrix
-        # remove negative values (can be directly removed in csr_matrix without using applymap)
-        gs_count_mat.data[gs_count_mat.data < 0] = 0
-
-        # remove 0 values by filtering out columns where the sum of each column is zero
-        count_per_sample = np.array(gs_count_mat.sum(axis=0)).flatten()
-        non_zero_columns_idx = np.where(count_per_sample != 0)[0]
-        gs_count_mat = gs_count_mat[:, non_zero_columns_idx]
-        count_per_sample = count_per_sample[non_zero_columns_idx]
-
-        self.mix_raw = gs_count_mat
-        self.gs_genes = gs_count_genes
-        self.gs_samples = gs_count_samples
-        self.batch_info = batch_info
-        self.GS_file = GS_file
-        self.peak_file =peak_file
-
-        if self.mix_raw.shape[0] != len(set(self.gs_genes)):
-            tmp_df = copy.deepcopy(self.mix_raw.todense())
-            idx_name = self.gs_genes
-            tmp_df = pd.DataFrame(tmp_df, index=idx_name)
-            tmp_df['symbol'] = idx_name
-            tmp_df = tmp_df.dropna(subset=["symbol"])
-            self.mix_raw = csr_matrix(tmp_df.groupby("symbol").median().values) # Take median value for duplication rows
-            self.gs_genes = tmp_df.groupby("symbol").median().index
-
+            adata = ad.read_h5ad(gs_count_file)
+            self.mix_raw = adata.X
+            self.gs_genes = adata.var_names
+            self.gs_samples = adata.obs_names
+        self.pre_normalized = pre_normalized
         logger.info('original: {}'.format(self.mix_raw.shape))
 
     def preprocessing(self,linear2log=True,log2linear=False,
@@ -853,7 +916,6 @@ class gsPreProcessing():
         logger.info('sample selection: {}'.format(self.target_df.shape))
     def preprocessing_forBERT(self,gene_names):
         import scanpy as sc
-        import anndata as ad
         # TODO:20260128
         self.mix_raw = self.mix_raw.transpose()
         # gene_embeddings = np.load(gene2vec_file)
@@ -874,4 +936,48 @@ class gsPreProcessing():
         self.target_df = data_csr
         self.target_int = copy.deepcopy(data_csr)
         self.target_int.data = np.floor(self.target_int.data).astype(int)
+
+    def preprocessing_forFoundation(self,gene_names):
+        import scanpy as sc
+        if len(gene_names) == 0:
+            print("Please input gene_names.")
+            return
+
+        if self.pre_normalized == False:
+            X_df = pd.DataFrame(self.mix_raw.todense().T, index=self.gs_samples, columns=self.gs_genes)
+            X_df, to_fill_columns, var = main_gene_selection(X_df, gene_names)  
+
+            adata = sc.AnnData(X_df,obs = pd.DataFrame(index = X_df.index),var =pd.DataFrame(index=X_df.columns) )
+
+            adata_uni = BasicFilter(adata,qc_min_genes=200,qc_min_cells=0) # filter cell and gene by lower limit
+            adata_uni = QC_Metrics_info(adata)
+
+            self.mix_raw = copy.deepcopy(adata_uni.X)
+            self.gs_genes = copy.deepcopy(adata_uni.var_names)
+            self.gs_samples = copy.deepcopy(adata_uni.obs_names)
+
+            adata_uni= adata_uni[:,adata_uni.var_names.isin(gene_names)].copy()
+            indices = [index for index, element in enumerate(gene_names) \
+                    if element in adata_uni.var_names]
+            
+            sc.pp.normalize_total(adata_uni, target_sum=1e4)
+            sc.pp.log1p(adata_uni)
+            
+            data_csr = csr_matrix((adata_uni.shape[0], len(gene_names)), dtype=np.float32)
+            indices = [index for index, element in enumerate(gene_names) \
+                    if element in self.gs_genes]
+            data_csr[:, indices]  = np.array(adata_uni.X)
+
+        else:
+            self.mix_raw = self.mix_raw.todense().T
+            data_csr = csr_matrix((self.mix_raw.shape[0], len(gene_names)), dtype=np.float32) 
+            indices = [index for index, element in enumerate(gene_names) \
+                    if element in self.gs_genes]
+            data_csr[:, indices]  = np.array(self.mix_raw)
+        
+        self.use_genes = self.gs_genes = gene_names
+        self.target_df = data_csr
+        self.target_int = copy.deepcopy(data_csr)
+        self.target_int.data = np.floor(self.target_int.data).astype(int)
+
 

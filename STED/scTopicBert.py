@@ -11,6 +11,8 @@ import hdbscan
 from hdbscan import HDBSCAN
 import datetime as dt
 
+from tqdm import tqdm
+
 import torch
 from torch import nn
 from torch.optim import Adam
@@ -19,6 +21,7 @@ import plotly.io as pio
 import plotly.graph_objects as go
 
 from scipy.cluster import hierarchy as sch
+from scipy.sparse import issparse
 from scipy.spatial.distance import euclidean
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics import accuracy_score, f1_score
@@ -33,6 +36,7 @@ from .BertFunction import *
 from .performer_pytorch import *
 from .epiDecon import *
 from .plot_utils import *
+from .load import load_model_frommmf, gatherData
 
 import gc
 import leidenalg
@@ -389,7 +393,7 @@ class ClusterModel:
     def predict(self, X):
         return X
 
-class scTopic_BERT():
+class scTopicBERT():
     def __init__(self) :
         self.genes = None
         self.use_genes =None
@@ -418,7 +422,6 @@ class scTopic_BERT():
         self.ann_dict = object.ann_dict
         self.input_df = object.input_df
         self.input_int = object.input_int
-
         self.ntopics_list = ntopics_list
         self.custom_labels_ = custom_labels_
 
@@ -634,58 +637,287 @@ class scTopic_BERT():
                             break
             del predictions, truths
 
-    def getEmbeddingModel(self,pretrain_file=None, gene2vec_file=None,
-                          encodings=False,CLS = False,last_layer=0,tie=False,CLASS = 7,dropout=0., h_dim=128):
-
-        if pretrain_file is None:
-            pretrain_file = self.model_name
-        
-        if gene2vec_file is not None:
-            self.gene2vec_file = gene2vec_file
-            self.g2v = True
-        else:
-            self.g2v = False
-        
-        self.CLS =CLS
-        self.encodings = encodings
-        self.CLASS = CLASS
-        self.max_seq_len = max_seq_len = len(self.genes)+1
-        if self.encodings:
-            if self.CLS:
-                self.outname = "CLS"+"_"+self.outname
+    def getEmbeddingModel(self,
+                          model_type='scFoundation',
+                          pretrain_file=None,
+                          tgthighres = "a5", 
+                          gene2vec_file=None,
+                          encodings=False,
+                          CLS = False,
+                          last_layer=0,
+                          tie=False,
+                          CLASS = 7,
+                          dropout=0., 
+                          h_dim=128):
+        self.model_type = model_type
+        self.tgthighres = tgthighres
+        if model_type == 'scFoundation':
+            #base_path = os.path.abspath(os.path.join(pretrain_file, "../../.."))
+            #Load data
+            if not isinstance(self.cells,list):
+                idx = self.cells.tolist()
             else:
-                self.outname = "Pooling"+"_"+self.outname
+                idx = self.cells
+
+            if not isinstance(self.genes, list):
+                col = self.genes.tolist()
+            else:
+                col = self.genes
+
+            if issparse(self.input_df):
+                gexpr_feature = self.input_df.toarray()
+            else:
+                gexpr_feature = self.input_df
+        
+            gexpr_feature = pd.DataFrame(gexpr_feature,index=idx,columns=col)
+
+            if gexpr_feature.shape[1]<19264:
+                print('covert gene feature into 19264')
+                return
+            pre_normalized = 'F'
+            key ='rde'
+            ckpt_path = pretrain_file
+
+            # if (args.pre_normalized == 'F') and (args.input_type == 'bulk'):
+            #     adata = sc.AnnData(gexpr_feature)
+            #     sc.pp.normalize_total(adata)
+            #     sc.pp.log1p(adata)
+            #     gexpr_feature = pd.DataFrame(adata.X,index=adata.obs_names,columns=adata.var_names)
+
+            #Load model
+            
+            pretrainmodel,pretrainconfig = load_model_frommmf(ckpt_path,'cpu',key)
+            self.embedding_model = pretrainmodel
+            self.config = pretrainconfig
+
+        elif model_type == 'scBERT':
+            if pretrain_file is None:
+                pretrain_file = self.model_name
+            if gene2vec_file is not None:
+                self.gene2vec_file = gene2vec_file
+                self.g2v = True
+            else:
+                self.g2v = False
+            
+            
+            self.CLS =CLS
+            self.encodings = encodings
+            self.CLASS = CLASS
+            self.max_seq_len = max_seq_len = len(self.genes)+1
+            if self.encodings:
+                if self.CLS:
+                    self.outname = "CLS"+"_"+self.outname
+                else:
+                    self.outname = "Pooling"+"_"+self.outname
+            else:
+                self.outname = "Last"+str(last_layer)+"_"+self.outname
+
+            model = PerformerLM_modified(
+                num_tokens = CLASS,
+                dim = 200,
+                depth = 6,
+                max_seq_len = max_seq_len,
+                heads = 10,
+                gene_weight_file=gene2vec_file,
+                local_attn_heads = 0,
+                tie_embed = tie,
+                return_encodings = encodings,
+                return_cls = CLS,
+                return_last=last_layer,
+                g2v_position_emb = self.g2v)
+            
+            model.to_out = Identity(dropout=dropout, h_dim=h_dim, out_dim=len(self.celltypes))
+            # model.to_out = BioClassifier(seq_len=16907, embed_dim=200, num_classes=len(self.celltypes))
+            # model.to_out = MinimalIdentity(out_dim=len(self.celltypes))
+            
+            ckpt = torch.load(pretrain_file,map_location=torch.device("cpu"))
+            model.load_state_dict(ckpt['model_state_dict'])
+            for param in model.parameters():
+                param.requires_grad = False
+            for param in model.norm.parameters():
+                param.requires_grad = True
+            for param in model.performer.net.layers[-2].parameters():
+                param.requires_grad = True
+
+            self.embedding_model = model
         else:
-            self.outname = "Last"+str(last_layer)+"_"+self.outname
+            raise ValueError(f"model_type {model_type} not supported")
 
-        model = PerformerLM_modified(
-            num_tokens = CLASS,
-            dim = 200,
-            depth = 6,
-            max_seq_len = max_seq_len,
-            heads = 10,
-            gene_weight_file=gene2vec_file,
-            local_attn_heads = 0,
-            tie_embed = tie,
-            return_encodings = encodings,
-            return_cls = CLS,
-            return_last=last_layer,
-            g2v_position_emb = self.g2v)
+    def getEmbedding(self,batch_size=50,
+                     input_df= None,
+                     seed_embedding=None,
+                     seed=0,
+                     device_name = "cuda:0"):
         
-        model.to_out = Identity(dropout=dropout, h_dim=h_dim, out_dim=len(self.celltypes))
-        # model.to_out = BioClassifier(seq_len=16907, embed_dim=200, num_classes=len(self.celltypes))
-        # model.to_out = MinimalIdentity(out_dim=len(self.celltypes))
+        self.device_name = device_name
+        self.seed = seed
         
-        ckpt = torch.load(pretrain_file,map_location=torch.device("cpu"))
-        model.load_state_dict(ckpt['model_state_dict'])
-        for param in model.parameters():
-            param.requires_grad = False
-        for param in model.norm.parameters():
-            param.requires_grad = True
-        for param in model.performer.net.layers[-2].parameters():
-            param.requires_grad = True
+        random.seed(seed)
+        np.random.seed(seed)  # numpy random generator
+        torch.manual_seed(self.seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        device = torch.device(self.device_name)
 
-        self.embedding_model = model
+        if input_df is None:
+            input_df = self.input_df
+
+        if self.model_type == 'scFoundation':
+            pretrainmodel = self.embedding_model 
+            pretrainmodel.to(device)
+            pretrainmodel.eval()
+            geneexpemb=[]
+            input_type = "singlecell"
+            output_type = "cell"
+            strname = os.path.join(self.model_dir,
+                                   self.outname+"01B-resolution" +"_"+ 
+                                   input_type + '_' + output_type + '_embedding_' + 
+                                   self.tgthighres+ '_resolution.npy')
+            print('save at {}'.format(strname))
+            if not isinstance(input_df, pd.DataFrame):
+                data_matrix = input_df.todense() if hasattr(input_df, "todense") else input_df
+    
+                input_df = pd.DataFrame(
+                    data_matrix, 
+                    index=self.cells, 
+                    columns=self.genes
+                )
+            
+            start_time = time.time()
+            #Inference
+            for i in tqdm(range(input_df.shape[0])):
+                with torch.no_grad():
+                    #Single cell
+                    tmpdata = (np.log1p(input_df.iloc[i,:]/(input_df.iloc[i,:].sum())*1e4)).tolist()
+                    totalcount = input_df.iloc[i,:].sum()
+                    # select resolution
+                    if self.tgthighres[0] == 'f':
+                        pretrain_gene_x = torch.tensor(tmpdata+[np.log10(totalcount*float(self.tgthighres[1:])),np.log10(totalcount)]).unsqueeze(0).to(device)
+                    elif self.tgthighres[0] == 'a':
+                        pretrain_gene_x = torch.tensor(tmpdata+[np.log10(totalcount)+float(self.tgthighres[1:]),np.log10(totalcount)]).unsqueeze(0).to(device)
+                    elif self.tgthighres[0] == 't':
+                        pretrain_gene_x = torch.tensor(tmpdata+[float(self.tgthighres[1:]),np.log10(totalcount)]).unsqueeze(0).to(device)
+                    else:
+                        raise ValueError('tgthighres must be start with f, a or t')
+                    data_gene_ids = torch.arange(19266, device=pretrain_gene_x.device).repeat(pretrain_gene_x.shape[0], 1)
+
+                    value_labels = pretrain_gene_x > 0
+                    x, x_padding = gatherData(pretrain_gene_x, value_labels, self.config['pad_token_id'])
+
+                    #Cell embedding
+                    position_gene_ids, _ = gatherData(data_gene_ids, value_labels, self.config['pad_token_id'])
+                    x = pretrainmodel.token_emb(torch.unsqueeze(x, 2).float(), output_weight = 0)
+                    position_emb = pretrainmodel.pos_emb(position_gene_ids)
+                    x += position_emb
+                    geneemb = pretrainmodel.encoder(x,x_padding)
+
+                    geneemb1 = geneemb[:,-1,:]
+                    geneemb2 = geneemb[:,-2,:]
+                    geneemb3, _ = torch.max(geneemb[:,:-2,:], dim=1)
+                    geneemb4 = torch.mean(geneemb[:,:-2,:], dim=1)
+                    geneembmerge = torch.concat([geneemb1,geneemb2,geneemb3,geneemb4],axis=1)
+                    geneexpemb.append(geneembmerge.detach().cpu().numpy())
+            geneexpemb = np.squeeze(np.array(geneexpemb))
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+            # 格式化运行时间为小时、分钟和秒
+            hours, remainder = divmod(elapsed_time, 3600)
+            minutes, seconds = divmod(remainder, 60)
+
+            print(f"代码运行时间: {int(hours)}:{int(minutes):02}:{seconds:05.2f}")
+            np.save(strname,geneexpemb)
+            self.embeddings = copy.deepcopy(geneexpemb)
+            self.cell_id = list(range(len(self.cells)))
+
+        else:
+
+            model = self.embedding_model.to(device)
+
+            # if self.gene_select:
+            #     gene_mask = [self.genes.index(i) for i in self.genes if i in self.use_genes]
+            #     input_df[:,gene_mask]= 0
+            #     self.outname = self.outname+"_"+"GeneSelect"
+
+            dataset = SCDataset_forTransform(input_df,np.array(range(len(self.cells))),self.CLASS,torch.device("cpu"))
+            data_loader = DataLoader(dataset, batch_size=batch_size)
+
+            model.eval()
+            embedding_list = []
+            data_list = []
+            cell_list = []
+            for index, (data, labels) in enumerate(data_loader):
+                cell_list+=[labels.cpu().numpy()]
+                data_list.append(data)
+                data = data.to(device)
+
+                with torch.no_grad():
+                    embeddings = model(data)
+                    embedding_list.append(embeddings.cpu().numpy())
+
+            shape = (batch_size-embedding_list[index].shape[0], embedding_list[index].shape[1])
+            pad_array = np.zeros(shape)
+            embedding_list[index] = np.concatenate((embedding_list[index], pad_array), axis=0)
+            embeddings_np = np.concatenate(embedding_list,axis=0)
+            embeddings_np = embeddings_np[:len(self.cells),:]
+
+            pad_array = np.zeros((shape[0],data_list[index].shape[1]))
+            data_list[index] = np.concatenate((data_list[index], pad_array), axis=0)
+            input_int = np.concatenate(data_list,axis=0)
+            input_int = input_int[:len(self.cells),:]
+
+            pad_array = np.zeros((shape[0],))
+            cell_list[index] = np.concatenate((cell_list[index], pad_array), axis=0)
+            cellid = np.concatenate(cell_list,axis=0)
+            cellid = cellid[:len(self.cells)].astype(int)
+
+            self.input_int = copy.deepcopy(input_int)
+            self.cell_id = copy.deepcopy(cellid)
+
+            del embeddings,data
+            if self.device_name.startswith("cuda"):
+                torch.cuda.empty_cache()
+
+            if self.anchor_list is not None:
+                self.outname = self.outname +"_seeded" 
+                if seed_embedding is None:
+                    seed_dataset = SCDataset(self.seed_mat,np.array(range(self.seed_mat.shape[0])),self.CLASS,torch.device("cpu"))
+                    seeddata_loader = DataLoader(seed_dataset, batch_size=self.seed_mat.shape[0])
+                
+                    model.eval()
+                    seed_embedding_list = []
+                    for index, (seed_data, labels) in enumerate(seeddata_loader):
+                        seed_data = seed_data.to(device)
+                        with torch.no_grad():
+                            seed_embeddings = model(seed_data)
+                            seed_embedding_list.append(seed_embeddings.cpu().numpy())
+                    
+                    shape = (batch_size-seed_embedding_list[index].shape[0], seed_embedding_list[index].shape[1])
+                    pad_array = np.zeros(shape)
+                    seed_embedding_list[index] = np.concatenate((seed_embedding_list[index], pad_array), axis=0)
+                    seed_embeddings_np = np.concatenate(seed_embedding_list,axis=0)
+                    seed_embeddings_np = seed_embeddings_np[:len(self.cells),:]
+
+                    
+                    self.seed_embeddings = seed_embeddings_np
+                    np.save(os.path.join(self.model_dir,"embeddings_seed_"+self.outname+".npy"), seed_embeddings_np)
+                    gc.collect()
+                else:
+                    self.seed_embeddings = seed_embeddings
+                
+                y, embeddings_np = self._guided_topic_modeling(self.seed_embeddings,embeddings_np)
+                self.y = y
+                print("use seed!")
+
+            self.embeddings = copy.deepcopy(embeddings_np)
+            np.save(os.path.join(self.model_dir,"embeddings_"+self.outname+".npy"), embeddings_np)
+            np.save(os.path.join(self.model_dir,"input_"+self.outname+".npy"), input_int)
+            np.save(os.path.join(self.model_dir,"cellindex_embeddings_"+self.outname+".npy"), cellid) 
+            gc.collect()
+
+            if self.device_name.startswith("cuda"):
+                torch.cuda.empty_cache()
+
 
     def getClusterModel(self,supervise = True,cluster_method=None,resolution=0.4,
                         min_samples=3,min_cluster_size=50,metric='euclidean',
@@ -724,101 +956,6 @@ class scTopic_BERT():
                                                  seed_multiplier=self.seed_multiplier)
             self.seed_words =seed_words
         self.ctfidf_model = ctfidf_model
-    
-    def getEmbedding(self,batch_size=50,input_df= None,seed_embedding=None,seed=9,device_name = "cuda:0"):
-        self.device_name = device_name
-        self.seed = seed
-        torch.manual_seed(self.seed)
-        device = torch.device(self.device_name)
-
-        if input_df is None:
-            input_df = self.input_df
-
-        model = self.embedding_model.to(device)
-
-        # if self.gene_select:
-        #     gene_mask = [self.genes.index(i) for i in self.genes if i in self.use_genes]
-        #     input_df[:,gene_mask]= 0
-        #     self.outname = self.outname+"_"+"GeneSelect"
-
-        dataset = SCDataset_forTransform(input_df,np.array(range(len(self.cells))),self.CLASS,torch.device("cpu"))
-        data_loader = DataLoader(dataset, batch_size=batch_size)
-
-        model.eval()
-        embedding_list = []
-        data_list = []
-        cell_list = []
-        for index, (data, labels) in enumerate(data_loader):
-            cell_list+=[labels.cpu().numpy()]
-            data_list.append(data)
-            data = data.to(device)
-
-            with torch.no_grad():
-                embeddings = model(data)
-                embedding_list.append(embeddings.cpu().numpy())
-
-        shape = (batch_size-embedding_list[index].shape[0], embedding_list[index].shape[1])
-        pad_array = np.zeros(shape)
-        embedding_list[index] = np.concatenate((embedding_list[index], pad_array), axis=0)
-        embeddings_np = np.concatenate(embedding_list,axis=0)
-        embeddings_np = embeddings_np[:len(self.cells),:]
-
-        pad_array = np.zeros((shape[0],data_list[index].shape[1]))
-        data_list[index] = np.concatenate((data_list[index], pad_array), axis=0)
-        input_int = np.concatenate(data_list,axis=0)
-        input_int = input_int[:len(self.cells),:]
-
-        pad_array = np.zeros((shape[0],))
-        cell_list[index] = np.concatenate((cell_list[index], pad_array), axis=0)
-        cellid = np.concatenate(cell_list,axis=0)
-        cellid = cellid[:len(self.cells)].astype(int)
-
-        self.input_int = copy.deepcopy(input_int)
-        self.cell_id = copy.deepcopy(cellid)
-
-        del embeddings,data
-        if self.device_name.startswith("cuda"):
-            torch.cuda.empty_cache()
-
-        if self.anchor_list is not None:
-            self.outname = self.outname +"_seeded" 
-            if seed_embedding is None:
-                seed_dataset = SCDataset(self.seed_mat,np.array(range(self.seed_mat.shape[0])),self.CLASS,torch.device("cpu"))
-                seeddata_loader = DataLoader(seed_dataset, batch_size=self.seed_mat.shape[0])
-            
-                model.eval()
-                seed_embedding_list = []
-                for index, (seed_data, labels) in enumerate(seeddata_loader):
-                    seed_data = seed_data.to(device)
-                    with torch.no_grad():
-                        seed_embeddings = model(seed_data)
-                        seed_embedding_list.append(seed_embeddings.cpu().numpy())
-                
-                shape = (batch_size-seed_embedding_list[index].shape[0], seed_embedding_list[index].shape[1])
-                pad_array = np.zeros(shape)
-                seed_embedding_list[index] = np.concatenate((seed_embedding_list[index], pad_array), axis=0)
-                seed_embeddings_np = np.concatenate(seed_embedding_list,axis=0)
-                seed_embeddings_np = seed_embeddings_np[:len(self.cells),:]
-
-                
-                self.seed_embeddings = seed_embeddings_np
-                np.save(os.path.join(self.model_dir,"embeddings_seed_"+self.outname+".npy"), seed_embeddings_np)
-                gc.collect()
-            else:
-                self.seed_embeddings = seed_embeddings
-            
-            y, embeddings_np = self._guided_topic_modeling(self.seed_embeddings,embeddings_np)
-            self.y = y
-            print("use seed!")
-
-        self.embeddings = copy.deepcopy(embeddings_np)
-        np.save(os.path.join(self.model_dir,"embeddings_"+self.outname+".npy"), embeddings_np)
-        np.save(os.path.join(self.model_dir,"input_"+self.outname+".npy"), input_int)
-        np.save(os.path.join(self.model_dir,"cellindex_embeddings_"+self.outname+".npy"), cellid) 
-        gc.collect()
-
-        if self.device_name.startswith("cuda"):
-            torch.cuda.empty_cache()
 
     def getDocs(self, sparse_matrix, use_genes=None):
         gene_names = self.genes
@@ -848,9 +985,20 @@ class scTopic_BERT():
     def fit(self,embedding_file = None,cellid_file = None,use_bin = False,nr_topics=None):
         self.use_bin = use_bin
 
+        if cellid_file is None:
+            try:
+                cellid_file= os.path.join(os.path.dirname(embedding_file),"cellindex_"+os.path.basename(embedding_file))
+                cell_list = np.load(cellid_file).astype(int).tolist()
+            except:
+                cell_list = list(range(len(self.cells)))
+        else:
+            if isinstance(cellid_file, str):
+                cell_list = np.load(cellid_file).astype(int).tolist()
+            else:
+                cell_list = cellid_file
+
         if embedding_file is None:
             embeddings = self.embeddings
-            cell_list = self.cell_id.astype(int).tolist()
         else:
             embeddings = np.load(embedding_file)
 
@@ -863,14 +1011,6 @@ class scTopic_BERT():
                     self.use_bin = False   
 
             self.embeddings = embeddings
-            if cellid_file is None:
-                cellid_file= os.path.join(os.path.dirname(embedding_file),"cellindex_"+os.path.basename(embedding_file))
-                cell_list = np.load(cellid_file).astype(int).tolist()
-            else:
-                if isinstance(cellid_file, str):
-                    cell_list = np.load(cellid_file).astype(int).tolist()
-                else:
-                    cell_list = cellid_file
         
         self.cell_list  = cell_list
         
@@ -1011,69 +1151,137 @@ class scTopic_BERT():
                     os.path.join(self.model_dir, "topics_genes_fig.pdf"))
 
     def transform(self,embedding_file = None,input_df=None,
-                  batch_size=50,seed=9,similarity="cluster",device_name="cuda:0"):
+                  batch_size=50,seed=0,similarity="cluster",device_name="cuda:0"):
         self.seed = seed
+        torch.manual_seed(self.seed)
+        device = torch.device(device_name)
         if embedding_file is None:
-            torch.manual_seed(self.seed)
-            device = torch.device(device_name)
-            model = self.embedding_model.to(device)
-            sampel_num = input_df.shape[0]
+            if self.model_type == "scFoundation":
+                if not isinstance(input_df, pd.DataFrame):
+                    data_matrix = input_df.todense() if hasattr(input_df, "todense") else input_df
+        
+                    input_df = pd.DataFrame(
+                        data_matrix, 
+                        index=pd.Index(list(range(input_df.shape[0]))), 
+                        columns=self.genes
+                    )
+                pretrainmodel = self.embedding_model 
+                pretrainmodel.to(device)
+                pretrainmodel.eval()
+                geneexpemb=[]
+                input_type = "bulk"
+                output_type = "cell"
+                strname = os.path.join(self.model_dir,
+                                   self.outname+"01B-resolution" +"_"+ 
+                                   input_type + '_' + output_type + '_embedding_' + 
+                                   self.tgthighres+ '_resolution.npy')
+                print('save at {}'.format(strname))
 
-            if sampel_num<batch_size:
-                batch_size=sampel_num
+                adata = sc.AnnData(input_df)
+                sc.pp.normalize_total(adata)
+                sc.pp.log1p(adata)
+                input_df = pd.DataFrame(adata.X,index=adata.obs_names,columns=adata.var_names)
+                
+                start_time = time.time()
+                #Inference
+                for i in tqdm(range(input_df.shape[0])):
+                    with torch.no_grad():
+                        totalcount = np.log10(input_df.iloc[i,:].sum())
+                        tmpdata = (input_df.iloc[i,:]).tolist()
+                        pretrain_gene_x = torch.tensor(tmpdata+[totalcount,totalcount]).unsqueeze(0).cuda()
+                        data_gene_ids = torch.arange(19266, device=pretrain_gene_x.device).repeat(pretrain_gene_x.shape[0], 1)
 
-            # if self.gene_select:
-            #     gene_mask = [self.genes.index(i) for i in self.genes if i in self.use_genes]
-            #     input_df[:,gene_mask]= 0
+                        value_labels = pretrain_gene_x > 0
+                        x, x_padding = gatherData(pretrain_gene_x, value_labels, self.config['pad_token_id'])
 
-            dataset = SCDataset_forTransform(input_df,np.array(range(sampel_num)),self.CLASS,torch.device("cpu"))
-            data_loader = DataLoader(dataset, batch_size=batch_size)
+                        position_gene_ids, _ = gatherData(data_gene_ids, value_labels, self.config['pad_token_id'])
+                        x = pretrainmodel.token_emb(torch.unsqueeze(x, 2).float(), output_weight = 0)
+                        position_emb = pretrainmodel.pos_emb(position_gene_ids)
+                        x += position_emb
+                        geneemb = pretrainmodel.encoder(x,x_padding)
 
-            model.eval()
-            embedding_list = []
-            data_list = []
-            sample_list = []
-            for index, (data, labels) in enumerate(data_loader):
-                sample_list+=[labels.cpu().numpy()]
-                data_list.append(data)
-                data = data.to(device)
-                with torch.no_grad():
-                    embeddings = model(data)
-                    embedding_list.append(embeddings.cpu().numpy())
+                        geneemb1 = geneemb[:,-1,:]
+                        geneemb2 = geneemb[:,-2,:]
+                        geneemb3, _ = torch.max(geneemb[:,:-2,:], dim=1)
+                        geneemb4 = torch.mean(geneemb[:,:-2,:], dim=1)
+                        geneembmerge = torch.concat([geneemb1,geneemb2,geneemb3,geneemb4],axis=1)
+                        geneexpemb.append(geneembmerge.detach().cpu().numpy())
+                geneexpemb = np.squeeze(np.array(geneexpemb))
+                end_time = time.time()
+                elapsed_time = end_time - start_time
+                # 格式化运行时间为小时、分钟和秒
+                hours, remainder = divmod(elapsed_time, 3600)
+                minutes, seconds = divmod(remainder, 60)
 
-            shape = (batch_size-embedding_list[index].shape[0], embedding_list[index].shape[1])
-            pad_array = np.zeros(shape)
-            embedding_list[index] = np.concatenate((embedding_list[index], pad_array), axis=0)
-            embeddings_np = np.concatenate(embedding_list,axis=0)
-            embeddings_np = embeddings_np[:sampel_num,:]
+                print(f"代码运行时间: {int(hours)}:{int(minutes):02}:{seconds:05.2f}")
+                np.save(strname,geneexpemb)
+                try:
+                    self.sample_embeddings = geneexpemb.cpu()
+                except:
+                    self.sample_embeddings = geneexpemb
+                if len(self.sample_embeddings.shape)==1:
+                    self.sample_embeddings = self.sample_embeddings.reshape(1,-1)
+                self.sample_id = np.array(["Sample"+str(i) for i in range(self.sample_embeddings.shape[0])])
+            else:
+                model = self.embedding_model.to(device)
+                sampel_num = input_df.shape[0]
 
-            pad_array = np.zeros((shape[0],data_list[index].shape[1]))
-            data_list[index] = np.concatenate((data_list[index], pad_array), axis=0)
-            input_int = np.concatenate(data_list,axis=0)
-            input_int = input_int[:sampel_num,:]
+                if sampel_num<batch_size:
+                    batch_size=sampel_num
 
-            pad_array = np.zeros((shape[0],))
-            sample_list[index] = np.concatenate((sample_list[index], pad_array), axis=0)
-            sampleid = np.concatenate(sample_list,axis=0)
-            sampleid = sampleid[:sampel_num].astype(int)
+                # if self.gene_select:
+                #     gene_mask = [self.genes.index(i) for i in self.genes if i in self.use_genes]
+                #     input_df[:,gene_mask]= 0
 
-            np.save(os.path.join(self.model_dir,"sampleinput_embeddings_"+self.outname+".npy"), input_int)
-            np.save(os.path.join(self.model_dir,"sample_embeddings_"+self.outname+".npy"), embeddings_np)
-            np.save(os.path.join(self.model_dir,"sampleindex_embeddings_"+self.outname+".npy"), sampleid) 
-            gc.collect()
+                dataset = SCDataset_forTransform(input_df,np.array(range(sampel_num)),self.CLASS,torch.device("cpu"))
+                data_loader = DataLoader(dataset, batch_size=batch_size)
 
-            self.sample_id = sampleid
+                model.eval()
+                embedding_list = []
+                data_list = []
+                sample_list = []
+                for index, (data, labels) in enumerate(data_loader):
+                    sample_list+=[labels.cpu().numpy()]
+                    data_list.append(data)
+                    data = data.to(device)
+                    with torch.no_grad():
+                        embeddings = model(data)
+                        embedding_list.append(embeddings.cpu().numpy())
 
-            try:
-                self.sample_embeddings = embeddings_np.cpu()
-            except:
-                self.sample_embeddings = embeddings_np
+                shape = (batch_size-embedding_list[index].shape[0], embedding_list[index].shape[1])
+                pad_array = np.zeros(shape)
+                embedding_list[index] = np.concatenate((embedding_list[index], pad_array), axis=0)
+                embeddings_np = np.concatenate(embedding_list,axis=0)
+                embeddings_np = embeddings_np[:sampel_num,:]
+
+                pad_array = np.zeros((shape[0],data_list[index].shape[1]))
+                data_list[index] = np.concatenate((data_list[index], pad_array), axis=0)
+                input_int = np.concatenate(data_list,axis=0)
+                input_int = input_int[:sampel_num,:]
+
+                pad_array = np.zeros((shape[0],))
+                sample_list[index] = np.concatenate((sample_list[index], pad_array), axis=0)
+                sampleid = np.concatenate(sample_list,axis=0)
+                sampleid = sampleid[:sampel_num].astype(int)
+
+                np.save(os.path.join(self.model_dir,"sampleinput_embeddings_"+self.outname+".npy"), input_int)
+                np.save(os.path.join(self.model_dir,"sample_embeddings_"+self.outname+".npy"), embeddings_np)
+                np.save(os.path.join(self.model_dir,"sampleindex_embeddings_"+self.outname+".npy"), sampleid) 
+                gc.collect()
+
+                self.sample_id = sampleid
+
+                try:
+                    self.sample_embeddings = embeddings_np.cpu()
+                except:
+                    self.sample_embeddings = embeddings_np
         else:
             sample_embeddings = np.load(embedding_file)
-            if len(sample_embeddings.shape)==1:
-                sample_embeddings = sample_embeddings.reshape(1,-1)
             self.sample_embeddings = sample_embeddings
-            self.sample_id = np.array(["Sample"+str(i) for i in range(sample_embeddings.shape[0])])
+            if len(self.sample_embeddings.shape)==1:
+                self.sample_embeddings = self.sample_embeddings.reshape(1,-1)
+            self.sample_id = np.array(["Sample"+str(i) for i in range(self.sample_embeddings.shape[0])])
+        
         if similarity=="cluster":
             if type(self.model.hdbscan_model) == HDBSCAN:
                 umap_embeddings = self.model.umap_model.transform_sample(X=self.sample_embeddings)
