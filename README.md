@@ -74,6 +74,15 @@ Core Python dependencies:
 - `scikit-learn`
 - `h5py`
 - `matplotlib`
+- `tqdm`
+- `scanpy`
+- `umap-learn`
+
+
+if use STED-BERTopic，more dependencies:
+- `torch`
+- `hdbscan`
+- `bertopic`
 
 R dependencies (for TopicAnnotation):
 - `clusterProfiler`

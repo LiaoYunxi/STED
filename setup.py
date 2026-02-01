@@ -12,7 +12,7 @@ guidedlda_ext = Extension(
 
 setup(
     name="STED",
-    version="0.1.0",
+    version="0.1.1",
     author="Liao Yunxi",
     author_email="2211110091@pku.edu.cn",
     description="Single-cell Topic Modeling & Epigenetic Deconvolution",
@@ -38,6 +38,9 @@ setup(
         "scikit-learn",
         "h5py",
         "matplotlib",
-        "tables"
+        "tables",
+        "tqdm",
+        "scanpy",
+        "umap-learn"
     ],
 )
