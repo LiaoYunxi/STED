@@ -10,7 +10,13 @@ from collections import Counter
 from scipy.sparse import csc_matrix, csr_matrix
 from itertools import combinations
 
-import lda._lda
+try:
+    from . import _guidedlda as _lda
+    from . import utils
+except ImportError:
+    import STED.guidedlda._guidedlda as _lda
+    import STED.guidedlda.utils as utils
+
 # import lda.utils
 ## edit 1.9.2020
 # import lda.guidedutils
@@ -111,7 +117,7 @@ class GuidedLDA:
             raise ValueError("alpha and eta must be greater than zero")
 
         # random numbers that are reused
-        rng = lda.utils.check_random_state(random_state)
+        rng = utils.check_random_state(random_state)
         if random_state:
             random.seed(random_state)
         self._rands = rng.rand(1024**2 // 8)  # 1MiB of random variates
@@ -189,7 +195,7 @@ class GuidedLDA:
             # turn it into an array of shape (1, n_features)
             X = np.atleast_2d(X)
         doc_topic = np.empty((X.shape[0], self.n_topics))
-        WS, DS = lda.utils.matrix_to_lists(X)
+        WS, DS = utils.matrix_to_lists(X)
         # TODO: this loop is parallelizable
         for d in np.unique(DS):
             doc_topic[d] = self._transform_single(WS[DS == d], max_iter, tol)
@@ -242,7 +248,7 @@ class GuidedLDA:
             Training vector, where n_samples in the number of samples and
             n_features is the number of features. Sparse matrix allowed.
         """
-        random_state = lda.utils.check_random_state(self.random_state)
+        random_state = utils.check_random_state(self.random_state)
         rands = self._rands.copy()
 
         self._initialize(X, seed_topics, seed_confidence)
@@ -297,7 +303,7 @@ class GuidedLDA:
         self.ndz_ = ndz_ = np.zeros((D, n_topics), dtype=np.intc) # + self.alpha
         self.nz_ = nz_ = np.zeros(n_topics, dtype=np.intc)# + W * self.beta
 
-        self.WS, self.DS = WS, DS = lda.utils.matrix_to_lists(X)
+        self.WS, self.DS = WS, DS = utils.matrix_to_lists(X)
         self.ZS = ZS = np.empty_like(self.WS, dtype=np.intc)
         np.testing.assert_equal(N, len(WS))
 
@@ -355,14 +361,14 @@ class GuidedLDA:
         alpha = self.alpha
         eta = self.eta
         nd = np.sum(ndz, axis=1).astype(np.intc)
-        return lda._lda._loglikelihood(nzw, ndz, nz, nd, alpha, eta)
+        return _lda._loglikelihood(nzw, ndz, nz, nd, alpha, eta)
 
     def _sample_topics(self, rands):
         """Samples all topic assignments. Called once per iteration."""
         n_topics, vocab_size = self.nzw_.shape
         alpha = np.repeat(self.alpha, n_topics).astype(np.float64)
         eta = np.repeat(self.eta, vocab_size).astype(np.float64)
-        lda._lda._sample_topics(self.WS, self.DS, self.ZS, self.nzw_, self.ndz_, self.nz_,
+        _lda._sample_topics(self.WS, self.DS, self.ZS, self.nzw_, self.ndz_, self.nz_,
                                             alpha, eta, rands)
     
     def get_topicword(self):

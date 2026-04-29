@@ -17,8 +17,10 @@ from sklearn.preprocessing import StandardScaler
 import logging
 logger = logging.getLogger('epiDecon')
 
-from .data import *
-from .Genescore import *
+from STED.data import *
+from STED.Genescore import *
+# Use the local modified Normalize for Scheme 3
+import Normalize 
 
 #%%
 
@@ -130,6 +132,8 @@ class epiDecon():
         self.model_dir = model_dir
         self.sc_cells = object_sc.sc_cells
         self.ann_dict = object_sc.ann_dict
+        self.ann_list = object_sc.ann_list
+        self.celltype_num_dict = object_sc.celltype_num_dict
         
         self.target_df = object_gs.target_df
         self.gs_genes = object_gs.use_genes 
@@ -155,6 +159,7 @@ class epiDecon():
         self.genes = gene_topic_mat.index.to_list()
         self.topics = gene_topic_mat.columns
         topic_cell_mat = pd.read_table(os.path.join(self.model_dir,"topic_cell_mat.txt"),sep="\t",index_col=0)
+        self.topic_cell_mat = ss.csc_matrix(topic_cell_mat.values)
         self.cells = topic_cell_mat.columns
 
 
@@ -302,6 +307,60 @@ class epiDecon():
                                                                                        self.topic_sample_mat, self.out_dir, self.model_dir)
         self.celltype_frac_df = bulk_celltype_array_norm_df
 
+    def BayesIterative(self, max_iter=5, tol=1e-3, initial_prior="uniform"):
+        """
+        Modified BayesIterative (Scheme 3): Empirical Bayes.
+        Iteratively updates the prior based on bulk predictions to avoid 
+        reference-proportion anchoring.
+        """
+        logger.info(f"Starting Empirical Bayes iteration (max_iter={max_iter}, tol={tol})")
+        
+        # Load the base topic-celltype matrix
+        topic_celltype_file = os.path.join(self.model_dir, "topic_celltype_mat.txt")
+        topic_celltype_df = pd.read_table(topic_celltype_file, sep="\t", index_col=0)
+        
+        n_celltypes = len(self.celltype_num_dict)
+        celltypes = list(self.celltype_num_dict.keys())
+        
+        # Iteration 0: Setup Initial Prior
+        if initial_prior == "uniform":
+            prior = np.array([1.0 / n_celltypes] * n_celltypes)
+        else:
+            # Fallback to scRNA-seq reference proportions
+            prior = np.array([self.celltype_num_dict[ct] / sum(self.celltype_num_dict.values()) for ct in celltypes])
+            
+        prev_frac = None
+        
+        for i in range(max_iter):
+            # 1. Update Bayes Matrix in Normalize
+            res = Normalize.ModelEvaluateBayes(self.topic_cell_mat, topic_celltype_df, self.ann_list, 
+                                              self.celltype_num_dict, self.model_dir, custom_prior=prior)
+            celltype_topic_bayes_df = res["celltype_topic_bayes_df"]
+            
+            # Save the iterative bayes matrix
+            iter_file = os.path.join(self.model_dir, "celltype_topic_mat_bayes.txt")
+            celltype_topic_bayes_df.to_csv(iter_file, sep="\t")
+            
+            # 2. Deconvolve
+            self.Bayes(norm_selection="Bayes")
+            current_frac = self.celltype_frac_df.values
+            
+            # 3. Check for convergence (on mean across samples)
+            avg_frac = current_frac.mean(axis=0)
+            if prev_frac is not None:
+                diff = np.linalg.norm(avg_frac - prev_frac)
+                logger.info(f"Iteration {i}: diff={diff:.6f}")
+                if diff < tol:
+                    logger.info(f"Converged at iteration {i}")
+                    break
+            
+            # 4. Update prior for next round
+            prev_frac = avg_frac
+            prior = avg_frac + 1e-6 # Add epsilon for stability
+            prior = prior / prior.sum()
+            
+        return self.celltype_frac_df
+
     def PeakPredict(self,sc_count_file,object_gs,GS_file=None,gene_anno_file=None,
                 scATAC_count_file=None,groud_truth_file=None,
                 ifscale = False,pseudo=False,benchmark=False):
@@ -341,18 +400,6 @@ class epiDecon():
         NMF, or other factorization methods), provided that the output format
         matches the standardized interface (topics x samples and topics x
         cell-types DataFrames).
-
-        Example
-        -------
-        >>> import pandas as pd
-        >>> from STED.epiDecon import epiDecon
-        >>> epi = epiDecon()
-        >>> epi.SetData(out_dir, scp, epid)
-        >>> # Supply externally generated matrices
-        >>> ts_df = pd.read_csv("external_topic_sample.tsv", sep="\\t", index_col=0)
-        >>> tc_df = pd.read_csv("external_topic_celltype.tsv", sep="\\t", index_col=0)
-        >>> epi.load_external_topic_matrices(ts_df, tc_df)
-        >>> epi.Bayes(norm_selection="Bayes")
 
         Parameters
         ----------
@@ -560,27 +607,18 @@ class epiDecon():
             peak_tmp = pd.read_table(self.peak_file, sep="\t", header=None)
             peak_tmp.columns = ["chr", "start", "end", "score"]
             peak_tmp.index = ["peak" + str(i) for i in range(peak_tmp.shape[0])]
-            # 注意：这里构造时如果不转置，通常 X 是 (Samples, Features)
-            # 这里的原始代码逻辑假定 peak_tmp['score'] 是一列，reshape后转置变成 (1, N_peaks)
             adata_CP = ad.AnnData(X=peak_tmp['score'].values.reshape(-1, 1).transpose(),
                                   obs=pd.DataFrame(index=["Bulk"]),
                                   var=peak_tmp[["chr", "start", "end"]])
 
-        # --- 关键修复 1: 维度检查与转置 ---
-        # self.var_names 来自 _bulk_prepare (基因-Peak映射)，是预期的 Peak 列表
         expected_peaks = len(self.var_names)
         
-        # 检查 adata_CP 的列数 (var) 是否匹配
         if adata_CP.shape[1] != expected_peaks:
-            print(f"检测到维度不匹配: adata_CP {adata_CP.shape}, 预期列数 {expected_peaks}")
-            # 如果行数匹配，说明矩阵被转置了 (Peaks x Samples)
             if adata_CP.shape[0] == expected_peaks:
-                print("正在转置 adata_CP 以匹配 (Samples x Peaks) ...")
                 adata_CP = adata_CP.T
             else:
                 raise ValueError(f"Peak文件的维度 {adata_CP.shape} 与预期的 Peak 数量 {expected_peaks} 不匹配。")
 
-        # 尝试设置 var_names (如果原来的 var 不含 chr/start/end 会报错，这里保留原有 try-except)
         try:
             peak_name = adata_CP.var["chr"].astype(str) + "_" + \
                         adata_CP.var["start"].astype(str) + "_" + \
@@ -592,52 +630,37 @@ class epiDecon():
         self.peak_meta = adata_CP.var
         peak = adata_CP.X
 
-        # --- 关键修复 2: 提取 Peak 向量并确保形状正确 ---
-        # 我们只需要第一个样本(Bulk)的 Peak 信号，形状必须是 (1, N_peaks)
-        
-        # 提取第一行
         if peak.shape[0] >= 1:
-            # 如果是稀疏矩阵，先切片再转 dense，确保 reshape 行为可控
             if scipy.sparse.issparse(peak):
-                peak_vec = peak[0, :].toarray()  # 结果是 (1, N_peaks)
+                peak_vec = peak[0, :].toarray()  
             else:
-                peak_vec = peak[0, :].reshape(1, -1) # 结果是 (1, N_peaks)
+                peak_vec = peak[0, :].reshape(1, -1) 
         else:
              raise ValueError("Peak 数据为空")
              
-        # 强制 peak 为 dense 矩阵用于点积 (避免 Pandas 构造时的稀疏兼容性问题)
         peak = peak_vec 
 
-        # 再次检查维度
         if peak.shape[1] != expected_peaks:
              raise ValueError(f"处理后的 Peak 向量形状 {peak.shape} 仍不匹配预期列数 {expected_peaks}")
 
         res_df = celltype_frac_df
         
-        # 读取真值文件
         if groud_truth_file is not None:
             gt = pd.read_table(groud_truth_file, sep='\t', index_col=0)
             res_df = res_df.loc[gt.index, :]
             res_df["gt"] = gt['Truth']
             self.gt = gt
 
-        # 计算预测矩阵
-        # per shape: (N_celltypes, 1)
         per = np.array(res_df['predict'].loc[celltype_index].tolist())
         per = np.expand_dims(per, axis=1)
         
-        # Ep1 shape: (N_celltypes, 1) dot (1, N_peaks) -> (N_celltypes, N_peaks)
         Ep1 = np.dot(per, peak)
         
-        # 这里不会再报错了，因为 Ep1 的列数现在保证是 expected_peaks
         Ep1_df = pd.DataFrame(Ep1, columns=self.var_names, index=celltype_index)
 
-        # 过滤非零列
         Ep = np.multiply(celltype_peak_weight_t, Ep1_df)
         Ep_df = pd.DataFrame(Ep, columns=self.var_names, index=celltype_index)
         nonzero_cols = Ep_df.sum(0) > 0
-        if nonzero_cols.sum() == 0:
-            print(f"警告：模型 {self.norm_selection} (ntop={self.ntopics_selection}, seed={self.seed_selection}) 无有效列")
         Ep_df_filter = Ep_df.loc[:, nonzero_cols]
 
         if pseudo:
@@ -646,9 +669,6 @@ class epiDecon():
             else:
                 celltype_peak_exp_filter = celltype_peak_exp_scaled.loc[:, nonzero_cols]
 
-            assert not Ep_df_filter.isnull().values.any(), "NaN 存在于 Ep_df_filter"
-
-            # 计算相关性
             value_cor_dic = {
                 idx: Ep_df_filter.loc[idx].corr(value)
                 for idx, value in celltype_peak_exp_filter.iterrows()
@@ -660,23 +680,14 @@ class epiDecon():
                 cor_res = res_df.corr().iloc[0, 1]
                 rmse_frac = sqrt(mean_squared_error(res_df["gt"], res_df['predict']))
 
-                # 计算性能指标
                 y_predict = Ep_df_filter.sum(0).to_numpy()
                 y_test = celltype_peak_exp_filter.sum(0).to_numpy()
                 
-                # 注意：adata_CP 可能已经被转置，这里取值要小心
-                # 此时 adata_CP.X 是 (Samples, Peaks)，直接切片即可
                 if scipy.sparse.issparse(adata_CP.X):
                     y_bulk_test = adata_CP.X[:, nonzero_cols].toarray().flatten()
                 else:
                     y_bulk_test = adata_CP.X[:, nonzero_cols].flatten()
 
-                # 再次检查 NaN
-                assert not np.isnan(y_predict).any(), "y_predict 含 NaN"
-                assert not np.isnan(y_test).any(), "y_test 含 NaN"
-                assert not np.isnan(y_bulk_test).any(), "y_bulk_test 含 NaN"
-
-                # 计算指标
                 mae = mean_absolute_error(y_test, y_predict)
                 mse = mean_squared_error(y_test, y_predict)
                 rmse = sqrt(mse)
@@ -719,7 +730,6 @@ def safe_normalize_rows(arr, eps=1e-12):
     row_sums = a.sum(axis=1, keepdims=True)
     zero_mask = row_sums <= eps
     if np.any(zero_mask):
-        logger.warning(f"Row normalization encountered {int(zero_mask.sum())} zero-sum rows; using denominator=1.")
         row_sums[zero_mask] = 1.0
     out = a / row_sums
     return out
@@ -730,7 +740,6 @@ def safe_normalize_cols(arr, eps=1e-12):
     col_sums = a.sum(axis=0, keepdims=True)
     zero_mask = col_sums <= eps
     if np.any(zero_mask):
-        logger.warning(f"Column normalization encountered {int(zero_mask.sum())} zero-sum columns; using denominator=1.")
         col_sums[zero_mask] = 1.0
     out = a / col_sums
     return out

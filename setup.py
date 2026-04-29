@@ -41,6 +41,12 @@ setup(
         "tables",
         "tqdm",
         "scanpy",
-        "umap-learn"
+        "umap-learn",
+        "gensim",
+        "corextopic",
+        "combat",
+        "pybedtools",
+        "pyranges",
+        "polars",
     ],
 )

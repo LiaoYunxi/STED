@@ -1,3 +1,44 @@
+Metadata-Version: 2.4
+Name: STED
+Version: 0.1.1
+Summary: Single-cell Topic Modeling & Epigenetic Deconvolution
+Home-page: https://github.com/LiaoYunxi/STED
+Author: Liao Yunxi
+Author-email: 2211110091@pku.edu.cn
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: pandas
+Requires-Dist: numpy
+Requires-Dist: networkx
+Requires-Dist: anndata
+Requires-Dist: plotly
+Requires-Dist: scipy
+Requires-Dist: scikit-learn
+Requires-Dist: h5py
+Requires-Dist: matplotlib
+Requires-Dist: tables
+Requires-Dist: tqdm
+Requires-Dist: scanpy
+Requires-Dist: umap-learn
+Requires-Dist: gensim
+Requires-Dist: corextopic
+Requires-Dist: combat
+Requires-Dist: pybedtools
+Requires-Dist: pyranges
+Requires-Dist: polars
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
 # STED: Single-cell Topic Modeling & Epigenetic profiles prediction
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)

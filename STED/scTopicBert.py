@@ -37,6 +37,7 @@ from .performer_pytorch import *
 from .epiDecon import *
 from .plot_utils import *
 from .load import load_model_frommmf, gatherData
+from .backend_interface import export_backend_outputs
 
 import gc
 import leidenalg
@@ -300,9 +301,9 @@ def save_figure(fig, file_path):
         fig.write_image(file_path,format="pdf")
 
 class BaseDimensionalityReduction:
-    def fit(self, X: np.ndarray = None):
+    def fit(self, X: np.ndarray = None, y: np.ndarray = None):
         return self
-    def fit_transform(self, X: np.ndarray) -> np.ndarray:
+    def fit_transform(self, X: np.ndarray, y: np.ndarray = None) -> np.ndarray:
         return X
     def transform(self, X: np.ndarray) -> np.ndarray:
         return X
@@ -315,7 +316,7 @@ class DimensionalityReduction:
         self.seed = seed
         self.reduced_embedding=reduced_embedding
 
-    def fit_transform(self, X):
+    def fit_transform(self, X, y=None):
         adata = self.adata.copy()
         adata.obsm = {"X_embeddings":X}
         sc.pp.neighbors(adata,use_rep="X_embeddings",n_neighbors=self.n_neighbors)
@@ -325,7 +326,7 @@ class DimensionalityReduction:
             return adata.obsm['X_umap']
         else:
             return adata.obsp['connectivities']
-    def fit(self, X):
+    def fit(self, X, y=None):
         adata = self.adata.copy()
         adata.obsm = {"X_embeddings":X}
         sc.pp.neighbors(adata,use_rep="X_embeddings",n_neighbors=self.n_neighbors)
@@ -1362,3 +1363,44 @@ class scTopicBERT():
         sample_celltype_array_norm_df = pd.DataFrame(sample_celltype_array_norm,index=self.sample_id.tolist(),columns=self.celltypes)
 
         return sample_celltype_array_df, sample_celltype_array_norm_df
+
+    def export_transfer_object(self, outname=None):
+        """Export standardized backend outputs used by epiDecon.
+
+        BERTopic produces the same three transferable outputs as CorEx and
+        LDA, but hierarchy is derived post-hoc rather than intrinsically.
+
+        Parameters
+        ----------
+        outname : str, optional
+            Suffix for output file names.
+
+        Returns
+        -------
+        dict
+            Dictionary with keys: gene_topic, cell_topic, topic_celltype, metadata.
+        """
+        gene_topic = pd.read_table(
+            os.path.join(self.model_dir, f"gene_topic_mat_{self.outname}.txt"),
+            sep="\t", index_col=0,
+        )
+        cell_topic = pd.read_table(
+            os.path.join(self.model_dir, f"topic_cell_mat_{self.outname}.txt"),
+            sep="\t", index_col=0,
+        )
+        if hasattr(self, "topic_celltype_df") and self.topic_celltype_df is not None:
+            topic_celltype = self.topic_celltype_df.copy()
+        else:
+            topic_celltype = pd.read_table(
+                os.path.join(self.model_dir, f"topic_celltype_mat_{self.outname}.txt"),
+                sep="\t", index_col=0,
+            )
+        return export_backend_outputs(
+            model_dir=self.model_dir,
+            gene_topic=gene_topic,
+            cell_topic=cell_topic,
+            topic_celltype=topic_celltype,
+            backend="BERTopic",
+            hierarchy_mode="posthoc",
+            outname=outname,
+        )

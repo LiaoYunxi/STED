@@ -9,7 +9,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import sys
 
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, issparse
 from sklearn.preprocessing import MaxAbsScaler #MinMaxScaler
 from sklearn.preprocessing import StandardScaler
 
@@ -321,7 +321,7 @@ class scPreProcessing():
             count_per_cell = np.array(sc_count_mat.sum(axis=0)).flatten()
             non_zero_columns_idx = np.where(count_per_cell != 0)[0]
             sc_count_mat = sc_count_mat[:, non_zero_columns_idx]
-            # sc_count_cells = [sc_count_cells[i] for i in non_zero_columns_idx.tolist()]
+            sc_count_cells = [sc_count_cells[i] for i in non_zero_columns_idx.tolist()]
             count_per_cell = count_per_cell[non_zero_columns_idx]
             # TODO:sc_count_mat shape: gene X cell 注释掉了下面一句
             #sc_count_genes = [sc_count_genes[i] for i in range(len(sc_count_genes)) if i in non_zero_columns_idx.tolist()]
@@ -582,12 +582,12 @@ class scPreProcessing():
 
         if self.pre_normalized == False:
             raw_csr = np.zeros((data.shape[0], len(gene_names)), dtype=np.float32) 
-            raw_csr[:, indices]=np.array(data.X.todense())
+            raw_csr[:, indices]=np.array(data.X.todense()) if issparse(data.X) else np.array(data.X)
             self.mix_raw = copy.deepcopy(csr_matrix(raw_csr))
             sc.pp.normalize_total(data, target_sum=1e4)
             sc.pp.log1p(data)
 
-            data_csr[:, indices]=np.array(data.X.todense())
+            data_csr[:, indices]=np.array(data.X.todense()) if issparse(data.X) else np.array(data.X)
         else:
             data_csr[:, indices]=np.array(data.X)
             

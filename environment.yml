@@ -1,0 +1,33 @@
+name: sted
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - numpy
+  - pandas
+  - scipy
+  - scikit-learn
+  - h5py
+  - matplotlib
+  - networkx
+  - tqdm
+  - umap-learn
+  - anndata
+  - scanpy
+  - tables
+  - plotly
+  - cython
+  - gensim
+  - pyranges
+  - polars
+  - pybedtools
+  - graphviz
+  - python-graphviz
+  - pip:
+      - corextopic
+      - combat
+      - nltk
+      - pygraphviz
+      - -e .

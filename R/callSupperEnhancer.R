@@ -209,7 +209,7 @@ writeSuperEnhancer_table <- function(superEnhancer,description,outputFile,additi
 # peak_dir ="/data/lyx/supplement/CRC/STED/CorEx_Tumor/model/"
 # outFolder = '/data/lyx/supplement/CRC/SE/'
 
-# Use：Rscript /data/lyx/supplement/ROSE_test/callSuperEnhancer.R "outFolder" "rankBy_factor_base" "enhancerName" "peak_dir"
+# Use：Rscript callSuperEnhancer.R "outFolder" "rankBy_factor_base" "enhancerName" "peak_dir" [stitching_distance]
 args <- commandArgs(trailingOnly = TRUE)
 
 print('THESE ARE THE ARGUMENTS')
@@ -218,6 +218,7 @@ outFolder = args[1]
 rankBy_factor_base = args[2]
 enhancerName = args[3]
 peak_dir =  args[4]
+stitching_distance <- ifelse(length(args) >= 5, as.numeric(args[5]), 12500)
 color2 = c('#e41a1c', "#F781BF")
 
 if(!dir.exists(dirname(outFolder))) dir.create(dirname(outFolder), recursive = TRUE)
@@ -248,10 +249,18 @@ gr_list <- lapply(results_list, parse_gr_from_df)
 all_peaks <- unlist(GRangesList(gr_list)) 
 consensus_peaks <- reduce(all_peaks) # 基础合并
 
-# SE 缝合：将距离小于 12.5kb 的区域合并
-stitched_regions <- reduce(consensus_peaks, min.gapwidth = 12500)
+# SE 缝合：将距离小于 stitching_distance (默认 12.5kb) 的区域合并
+stitched_regions <- reduce(consensus_peaks, min.gapwidth = stitching_distance)
 
 cat("Stitched regions count:", length(stitched_regions), "\n")
+
+# Save parameter snapshot for reproducibility
+params_df <- data.frame(
+  parameter = c("stitching_distance", "inflection_method", "input_file_pattern"),
+  value = c(as.character(stitching_distance), "tangent_point", "predicted_filtered_peaks.csv")
+)
+write.csv(params_df, file = file.path(outFolder, "SE_parameters.csv"), row.names = FALSE)
+cat("Saved SE parameters to", file.path(outFolder, "SE_parameters.csv"), "\n")
 
 # =================3.Construct the signal matrix=================
 celltypes <- colnames(results_list[[1]])

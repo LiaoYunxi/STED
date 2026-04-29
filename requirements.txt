@@ -1,0 +1,26 @@
+pandas
+numpy
+networkx
+anndata
+plotly
+scipy
+scikit-learn
+h5py
+matplotlib
+tables
+tqdm
+scanpy
+umap-learn
+gensim
+corextopic
+combat
+pybedtools
+pyranges
+polars
+nltk
+cython
+einops
+local-attention
+leidenalg
+igraph
+# pygraphviz  # Required for topic hierarchy visualization. Install via 'brew install graphviz' or 'apt-get install graphviz' first.

@@ -1,11 +1,13 @@
 import os
 import numpy as np
+import pandas as pd
 
 from .utils import *
 from .data import *
 from .TopicModel import *
 from .epiDecon import *
 from .plot_utils import *
+from .backend_interface import export_backend_outputs
 
 import matplotlib
 matplotlib.rcParams['font.family'] = 'sans-serif'
@@ -178,7 +180,7 @@ class scTopic():
                 Cex.ensemble_train(self.model_dir,self.ntopics_list,anchor_strength,indicator_selection,n_ensemble,n_iter,log=iflog)
         
                 if len(hierarchy_topic)>0:
-                    Cex.hierarchy_topic(n_hidden_list=hierarchy_topic,max_edges=200,plot =False,figfile=None)
+                    Cex.hierarchy(n_hidden_list=hierarchy_topic,max_edges=200,plot =False,figfile=None)
                 if tc_plot:
                     Cex.tc_plot()
 
@@ -189,13 +191,14 @@ class scTopic():
                 self.norm_selection = Cex.norm_selection
                 self.ntopics_selection = Cex.ntopics_selection
                 self.seed_selection = Cex.seed_selection
-                self.topic_layers = Cex.topic_layers
+                self.topic_layers = getattr(Cex, 'topic_layers', None)
                 self.indicator_selection = indicator_selection
+                self.model = Cex
             else:
                 Cex.conduct_train(self.model_dir,ntopics,anchor_strength,n_iter,seed,iflog)
         
                 if len(hierarchy_topic)>0:
-                    hier_topics = Cex.hierarchy(n_hidden_list=hierarchy_topic,max_edges=200,plot=True,figfile=None)
+                    hier_topics = Cex.hierarchy(n_hidden_list=hierarchy_topic,max_edges=200,plot=tc_plot,figfile=None)
                     self.hier_topics = hier_topics
                 #   fig = Cex.plot_hierarchy(hier_topics)
                 if tc_plot:
@@ -209,3 +212,26 @@ class scTopic():
                 self.norm_selection = Cex.norm_selection
 
     
+
+    def export_transfer_object(self, backend="unknown", hierarchy_mode="posthoc", outname=None):
+        """Export standardized backend outputs used by epiDecon."""
+        gene_topic = pd.read_table(os.path.join(self.model_dir, "gene_topic_mat.txt"), sep="\t", index_col=0)
+        cell_topic = pd.read_table(os.path.join(self.model_dir, "topic_cell_mat.txt"), sep="\t", index_col=0)
+        if hasattr(self, "topic_celltype_df") and self.topic_celltype_df is not None:
+            topic_celltype = self.topic_celltype_df.copy()
+            if topic_celltype.index.tolist() != cell_topic.index.tolist():
+                try:
+                    topic_celltype = topic_celltype.loc[cell_topic.index]
+                except Exception:
+                    pass
+        else:
+            topic_celltype = pd.read_table(os.path.join(self.model_dir, "topic_celltype_mat.txt"), sep="\t", index_col=0)
+        return export_backend_outputs(
+            model_dir=self.model_dir,
+            gene_topic=gene_topic,
+            cell_topic=cell_topic,
+            topic_celltype=topic_celltype,
+            backend=backend,
+            hierarchy_mode=hierarchy_mode,
+            outname=outname,
+        )

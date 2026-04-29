@@ -8,7 +8,10 @@ import matplotlib.pyplot as plt
 from sklearn.impute import SimpleImputer
 from scipy.stats import rankdata
 from scipy.sparse import csr_matrix
-from combat.pycombat import pycombat
+try:
+    from combat.pycombat import pycombat
+except ImportError:
+    pycombat = None
 
 def array_imputer(df,threshold=0.9,strategy="median",trim=1.0,batch=False,lst_batch=[], trim_red=True):
     """
@@ -276,6 +279,8 @@ def quantile(df, method="mean"):
     return pd.DataFrame(normalized, index=df.index, columns=df.columns)
 
 def batch_norm(df, lst_batch=[]):
+    if pycombat is None:
+        raise ImportError("combat package not installed. Install with: pip install combat")
     # df: genes x samples → transpose to samples x genes
     df_t = df.T
     comb_t = pycombat(df_t, lst_batch)  # assuming pycombat expects samples x genes

@@ -43,7 +43,10 @@ from gensim.models import CoherenceModel
 from gensim.corpora.dictionary import Dictionary
 
 import corextopic.corextopic as ct
-import corextopic.vis_topic as vt # jupyter notebooks will complain matplotlib is being loaded twice
+try:
+    import corextopic.vis_topic as vt # jupyter notebooks will complain matplotlib is being loaded twice
+except ImportError:
+    vt = None
 import textwrap
 from networkx.readwrite import json_graph
 from shutil import copyfile
@@ -520,11 +523,14 @@ class AnchoredLDA():
 
                     # save the gene-topic matrix
                     gene_topic_file = os.path.join(model_dir, "gene_topic_mat.txt")
-                    gene_topic_out = open(gene_topic_file, "w")
-                    gene_topic_out.write("\t".join(["Topic%s" %i for i in range(1, ntopics + 1)]) + "\n")
-                    for i in range(len(gene_topic_mat_list)):
-                        gene_topic_out.write(genes[i] + "\t" + "\t".join([str(j) for j in gene_topic_mat_list[i]]) + "\n")
-                    gene_topic_out.close()
+                    if isinstance(gene_topic_mat_list, pd.DataFrame):
+                        gene_topic_mat_list.to_csv(gene_topic_file, sep="\t")
+                    else:
+                        gene_topic_out = open(gene_topic_file, "w")
+                        gene_topic_out.write("\t".join(["Topic%s" %i for i in range(1, ntopics + 1)]) + "\n")
+                        for i in range(len(gene_topic_mat_list)):
+                            gene_topic_out.write(genes[i] + "\t" + "\t".join([str(j) for j in gene_topic_mat_list[i]]) + "\n")
+                        gene_topic_out.close()
 
                     # save topic_celltype file !!
                     topic_celltype_file = os.path.join(model_dir,"topic_celltype_mat.txt")
@@ -998,11 +1004,14 @@ class nonAnchoredLDA():
 
                     # save the gene-topic matrix
                     gene_topic_file = os.path.join(model_dir, "gene_topic_mat.txt")
-                    gene_topic_out = open(gene_topic_file, "w")
-                    gene_topic_out.write("\t".join(["Topic%s" %i for i in range(1, ntopics + 1)]) + "\n")
-                    for i in range(len(gene_topic_mat_list)):
-                        gene_topic_out.write(genes[i] + "\t" + "\t".join([str(j) for j in gene_topic_mat_list[i]]) + "\n")
-                    gene_topic_out.close()
+                    if isinstance(gene_topic_mat_list, pd.DataFrame):
+                        gene_topic_mat_list.to_csv(gene_topic_file, sep="\t")
+                    else:
+                        gene_topic_out = open(gene_topic_file, "w")
+                        gene_topic_out.write("\t".join(["Topic%s" %i for i in range(1, ntopics + 1)]) + "\n")
+                        for i in range(len(gene_topic_mat_list)):
+                            gene_topic_out.write(genes[i] + "\t" + "\t".join([str(j) for j in gene_topic_mat_list[i]]) + "\n")
+                        gene_topic_out.close()
 
                     # save topic_celltype file !!
                     topic_celltype_file = os.path.join(model_dir,"topic_celltype_mat.txt")
@@ -1393,11 +1402,14 @@ class CorEx():
 
                     # save the gene-topic matrix
                     gene_topic_file = os.path.join(model_dir, "gene_topic_mat.txt")
-                    gene_topic_out = open(gene_topic_file, "w")
-                    gene_topic_out.write("\t".join(["Topic%s" %i for i in range(1, ntopics + 1)]) + "\n")
-                    for i in range(len(gene_topic_mat_list)):
-                        gene_topic_out.write(genes[i] + "\t" + "\t".join([str(j) for j in gene_topic_mat_list[i]]) + "\n")
-                    gene_topic_out.close()
+                    if isinstance(gene_topic_mat_list, pd.DataFrame):
+                        gene_topic_mat_list.to_csv(gene_topic_file, sep="\t")
+                    else:
+                        gene_topic_out = open(gene_topic_file, "w")
+                        gene_topic_out.write("\t".join(["Topic%s" %i for i in range(1, ntopics + 1)]) + "\n")
+                        for i in range(len(gene_topic_mat_list)):
+                            gene_topic_out.write(genes[i] + "\t" + "\t".join([str(j) for j in gene_topic_mat_list[i]]) + "\n")
+                        gene_topic_out.close()
 
                     # save topic_celltype file !!
                     topic_celltype_file = os.path.join(model_dir,"topic_celltype_mat.txt")
