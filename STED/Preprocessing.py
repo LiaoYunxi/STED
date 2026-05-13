@@ -9,7 +9,8 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import sys
 
-from scipy.sparse import csr_matrix, issparse
+from scipy.sparse import csr_matrix, csc_matrix, issparse
+from collections import defaultdict
 from sklearn.preprocessing import MaxAbsScaler #MinMaxScaler
 from sklearn.preprocessing import StandardScaler
 
@@ -358,7 +359,74 @@ class scPreProcessing():
             # TODO:self.mix_raw[use_samples_idx,:]-->self.mix_raw[use_samples_idx,:]
             self.mix_raw = self.mix_raw[:,use_samples_idx]
             self.sc_cells = use_samples
-    
+
+    def subsample_celltypes(self, proportion_dict, random_state=42):
+        """按指定比例对特定细胞类型进行子采样，原地修改 mix_raw / sc_cells / ann_dict。
+
+        Args:
+            proportion_dict: {cell_type: target_fraction}
+                如 {"naive B cells": 0.01} 将该类型降至总细胞的 1%
+            random_state: 随机种子
+
+        Cell types NOT in proportion_dict keep all their cells.
+        The target fraction is relative to the final total cell count.
+        """
+        rng = np.random.default_rng(random_state)
+
+        # 构建 cell → cell_type 映射
+        ct_to_cells = defaultdict(list)
+        for cell in self.sc_cells:
+            ct = self.ann_dict.get(cell, "Unknown")
+            ct_to_cells[ct].append(cell)
+
+        original_counts = {ct: len(cells) for ct, cells in ct_to_cells.items()}
+
+        # 为每个细胞类型计算目标细胞数
+        target_counts = {}
+        for ct, cells in ct_to_cells.items():
+            if ct in proportion_dict:
+                target_frac = proportion_dict[ct]
+                other_total = sum(c for c2, c in original_counts.items() if c2 != ct)
+                if target_frac >= 1.0:
+                    target_count = len(cells)
+                elif target_frac <= 0:
+                    target_count = 0
+                else:
+                    target_count = max(1, int(round(other_total * target_frac / (1 - target_frac))))
+                target_count = min(target_count, len(cells))
+            else:
+                target_count = len(cells)
+            target_counts[ct] = target_count
+
+        # 子采样
+        selected_cells = []
+        for ct, cells in ct_to_cells.items():
+            n_select = target_counts[ct]
+            if n_select >= len(cells):
+                selected_cells.extend(cells)
+            else:
+                chosen = rng.choice(cells, size=n_select, replace=False).tolist()
+                selected_cells.extend(chosen)
+
+        # 按原始顺序排序
+        cell_order = {c: i for i, c in enumerate(self.sc_cells)}
+        selected_cells = sorted(selected_cells, key=lambda c: cell_order.get(c, len(self.sc_cells)))
+
+        # 构建列索引（mix_raw 是 gene × cell 的 CSC 矩阵）
+        cell_indices = [cell_order[c] for c in selected_cells if c in cell_order]
+        self.mix_raw = self.mix_raw[:, cell_indices]
+        self.sc_cells = selected_cells
+        self.ann_dict = {c: self.ann_dict[c] for c in selected_cells if c in self.ann_dict}
+
+        kept = {ct: sum(1 for c in selected_cells if ct_to_cells.get(ct) and c in ct_to_cells[ct])
+                for ct in original_counts}
+        logger.info(
+            f"subsample_celltypes: {len(selected_cells)} cells retained "
+            f"(from {sum(original_counts.values())}). "
+            f"Per-type: {dict((ct, f'{kept[ct]}/{original_counts[ct]}') for ct in sorted(original_counts))}"
+        )
+        logger.info(f"Target fractions: {proportion_dict}")
+
     def preprocessing(self,linear2log=False,log2linear=False,do_drop=True,do_batch_norm=False,do_norm=True,do_quantile=False):
         """
         数据预处理函数，包含多种预处理步骤
@@ -901,6 +969,7 @@ class gsPreProcessing():
             # TODO:self.target_df = self.mix_raw[:, use_gene_idx]-->self.target_df = self.mix_raw[use_gene_idx,:]
             self.target_df = self.mix_raw[use_gene_idx,:]
             self.use_genes = valid_genes
+            self.gs_genes = valid_genes  # Keep gs_genes in sync with target_df rows
             self.other_genes = list(gs_genes_set - set(valid_genes))
             
             # Log if any genes were filtered out

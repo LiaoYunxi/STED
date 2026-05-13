@@ -234,23 +234,26 @@ class epiDecon():
             # Align bulk gene columns with model gene set
             model_genes = self.genes  # from gene_topic_mat.txt (read above)
             bulk_genes = self.gs_genes if hasattr(self, 'gs_genes') else None
-            if bulk_genes is not None and x_bulk.shape[1] != len(model_genes):
-                logger.info(f"Aligning bulk data ({x_bulk.shape[1]} genes) to model gene set ({len(model_genes)} genes).")
-                aligned = np.zeros((x_bulk.shape[0], len(model_genes)))
-                shared = set(bulk_genes) & set(model_genes)
-                for g in shared:
-                    model_idx = model_genes.index(g)
-                    bulk_idx = bulk_genes.index(g)
-                    aligned[:, model_idx] = x_bulk[:, bulk_idx]
-                x_bulk = aligned
+            if bulk_genes is not None:
+                # Always align: gene order may differ even when counts match
+                if x_bulk.shape[1] != len(model_genes) or bulk_genes != model_genes:
+                    logger.info(f"Aligning bulk data ({x_bulk.shape[1]} genes) to model gene set ({len(model_genes)} genes).")
+                    aligned = np.zeros((x_bulk.shape[0], len(model_genes)))
+                    shared = set(bulk_genes) & set(model_genes)
+                    for g in shared:
+                        model_idx = model_genes.index(g)
+                        bulk_idx = bulk_genes.index(g)
+                        aligned[:, model_idx] = x_bulk[:, bulk_idx]
+                    x_bulk = aligned
             corex_bulk = None
             topic_sample_mat = None
             topic_sample_logmat = None
             if hasattr(corex, "transform"):
                 try:
-                    topic_probs = corex.transform(x_bulk)
+                    topic_probs, _ = corex.transform(x_bulk, details=True)
                     topic_sample_mat = ss.csc_matrix(np.asarray(topic_probs).transpose())
-                    logger.info("CorEx deconvolution used transform() (inference-only path).")
+                    topic_sample_logmat = None
+                    logger.info("CorEx deconvolution used transform(details=True) (inference-only path).")
                 except Exception as e:
                     logger.warning(f"CorEx transform() failed ({e}); falling back to fit() on bulk data.")
             if topic_sample_mat is None:
