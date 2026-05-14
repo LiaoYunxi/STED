@@ -171,7 +171,8 @@ def main_gene_selection(X_df, gene_list):
     return X_df, to_fill_columns
 
 def get_genename():
-    gene_list_df = pd.read_csv('./OS_scRNA_gene_index.19264.tsv', header=0, delimiter='\t')
+    _gene_anno = os.path.join(os.path.dirname(__file__), "..", "..", "demo", "OS_scRNA_gene_index.19264.tsv")
+    gene_list_df = pd.read_csv(_gene_anno, header=0, delimiter='\t')
     return list(gene_list_df['gene_name'])
 
 def save_AUCs(AUCs, filename):

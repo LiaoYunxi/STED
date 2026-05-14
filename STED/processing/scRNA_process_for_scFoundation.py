@@ -4,15 +4,17 @@ import numpy as np
 import os
 import argparse
 import scanpy as sc
-# add scFoundation path, your path may be different
-sys.path.append("/data/lyx/software/scFoundation/model")
-sys.path.append("/data/lyx/software/scFoundation")
+# scFoundation path — 通过环境变量 SCFOUNDATION_HOME 配置，或自动检测
+_SCFOUNDATION_HOME = os.environ.get("SCFOUNDATION_HOME", "/data/lyx/software/scFoundation")
+if os.path.isdir(_SCFOUNDATION_HOME):
+    sys.path.insert(0, os.path.join(_SCFOUNDATION_HOME, "model"))
+    sys.path.insert(0, _SCFOUNDATION_HOME)
 from STED.Preprocessing import *
 from preprocessing.scRNA_workflow import *
 
 ####################################Settings#################################
 parser = argparse.ArgumentParser(description='Pre_for_scFoundation')
-parser.add_argument('--data_dir', type=str, default='/data/lyx/scCHiP/scATAC/LDA/PBMC_10k/processed_data', help='data_dir')
+parser.add_argument('--data_dir', type=str, default=os.path.join(os.path.dirname(__file__), "..", "..", "..", "demo", "PBMC"), help='data_dir')
 parser.add_argument('--count_file', type=str, default='10k_PBMC_Multiome_filtered_gene_count.h5ad', help='scRNA-seq counts')
 parser.add_argument('--anno_file', type=str, default='MainCelltype.txt', help='cell annotation')
 parser.add_argument('--out_dir', type=str, default='PBMC_Main', help='out_dir')
@@ -60,7 +62,9 @@ def main():
     scp.set_data(sc_count_file=sc_count_file,sc_anno_file=sc_anno_file,batch_info=sc_batch_file)
     scp.cell_selection()
 
-    gene_list_df = pd.read_csv('/data/lyx/software/scFoundation/OS_scRNA_gene_index.19264.tsv', header=0, delimiter='\t')
+    _gene_anno_default = os.path.join(os.path.dirname(__file__), "..", "..", "..", "demo", "OS_scRNA_gene_index.19264.tsv")
+_gene_anno = os.environ.get("SCFOUNDATION_GENE_ANNO", _gene_anno_default)
+gene_list_df = pd.read_csv(_gene_anno, header=0, delimiter='\t')
     gene_list = list(gene_list_df['gene_name'])
 
     # TODO:20260128

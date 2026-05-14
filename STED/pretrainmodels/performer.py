@@ -433,7 +433,8 @@ def apply_rotary_pos_emb(q, k, sinu_pos):
 class Gene2VecPositionalEmbedding(nn.Module):
     def __init__(self, dim, max_seq_len):
         super().__init__()
-        gene2vec_weight = np.load('../data/gene2vec_16906.npy')
+        _default = os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'gene2vec_16906.npy')
+        gene2vec_weight = np.load(os.environ.get('GENE2VEC_WEIGHT', _default))
         gene2vec_weight = np.concatenate((gene2vec_weight, np.zeros((1, gene2vec_weight.shape[1]))), axis=0)
         gene2vec_weight = torch.from_numpy(gene2vec_weight)
         self.emb = nn.Embedding.from_pretrained(gene2vec_weight)
@@ -446,7 +447,8 @@ class Gene2VecPositionalEmbedding(nn.Module):
 class Gene2VecPositionalEmbeddingIdx(nn.Module):
     def __init__(self, dim, max_seq_len):
         super().__init__()
-        gene2vec_weight = np.load('/nfs_beijing/minsheng/scbig/data/biomap_gene2vec.npy')
+        _default = os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'biomap_gene2vec.npy')
+        gene2vec_weight = np.load(os.environ.get('BIOMAP_GENE2VEC', _default))
         gene2vec_weight = np.concatenate((np.zeros((1, gene2vec_weight.shape[1])),gene2vec_weight),axis=0)
         gene2vec_weight = gene2vec_weight[:,:dim]
         gene2vec_weight = torch.Tensor(gene2vec_weight)
